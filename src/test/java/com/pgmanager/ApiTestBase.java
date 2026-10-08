@@ -44,8 +44,7 @@ abstract class ApiTestBase {
         int port = freePort();
         AppConfig config = new AppConfig(
                 port,
-                new DatabaseConfig(postgres.getHost(), postgres.getMappedPort(5432), postgres.getDatabaseName(),
-                        postgres.getUsername(), postgres.getPassword()),
+                databaseConfig(),
                 new JwtConfig("integration-test-secret-at-least-32-chars", 3600));
 
         vertx = Vertx.vertx();
@@ -56,6 +55,12 @@ abstract class ApiTestBase {
     @AfterAll
     static void stopApplication() throws Exception {
         await(vertx.close());
+    }
+
+    /** Connection details of the test PostgreSQL, for tests that need to run SQL directly. */
+    protected static DatabaseConfig databaseConfig() {
+        return new DatabaseConfig(postgres.getHost(), postgres.getMappedPort(5432), postgres.getDatabaseName(),
+                postgres.getUsername(), postgres.getPassword());
     }
 
     /** Sends a request with an optional Bearer token and optional JSON body. */
