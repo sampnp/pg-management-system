@@ -163,7 +163,7 @@ class TenantOccupancyApiIntegrationTest extends ApiTestBase {
         // A checked-out tenant cannot either, because their history must be kept
         send(POST, "/api/tenants/" + active + "/check-out", token, null);
         assertError(send(DELETE, "/api/tenants/" + active, token, null), 409, "CONFLICT",
-                "Tenant cannot be deleted because they have occupancy or payment history");
+                "Tenant cannot be deleted because they have occupancy, payment or maintenance history");
         assertEquals(1, getArray("/api/tenants/" + active + "/history").size());
     }
 

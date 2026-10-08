@@ -6,6 +6,7 @@ import com.pgmanager.config.JsonConfig;
 import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.BedController;
 import com.pgmanager.controller.HealthController;
+import com.pgmanager.controller.MaintenanceController;
 import com.pgmanager.controller.OccupancyController;
 import com.pgmanager.controller.PaymentController;
 import com.pgmanager.controller.PropertyController;
@@ -15,6 +16,7 @@ import com.pgmanager.controller.UserController;
 import com.pgmanager.exception.GlobalErrorHandler;
 import com.pgmanager.model.Role;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.MaintenanceRepository;
 import com.pgmanager.repository.PaymentRepository;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
@@ -27,6 +29,7 @@ import com.pgmanager.security.PasswordHasher;
 import com.pgmanager.security.RoleHandler;
 import com.pgmanager.service.AuthService;
 import com.pgmanager.service.BedService;
+import com.pgmanager.service.MaintenanceService;
 import com.pgmanager.service.OccupancyService;
 import com.pgmanager.service.PaymentService;
 import com.pgmanager.service.PropertyService;
@@ -94,12 +97,14 @@ public class MainVerticle extends VerticleBase {
         BedRepository bedRepository = new BedRepository(pool);
         TenantBedHistoryRepository historyRepository = new TenantBedHistoryRepository();
         PaymentRepository paymentRepository = new PaymentRepository(pool);
+        MaintenanceRepository maintenanceRepository = new MaintenanceRepository(pool);
         PropertyService propertyService = new PropertyService(propertyRepository);
         RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
         BedService bedService = new BedService(pool, roomRepository, bedRepository, historyRepository);
         TenantService tenantService = new TenantService(tenantRepository);
         OccupancyService occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository);
         PaymentService paymentService = new PaymentService(paymentRepository, tenantRepository);
+        MaintenanceService maintenanceService = new MaintenanceService(maintenanceRepository, tenantRepository, userRepository);
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
@@ -110,6 +115,7 @@ public class MainVerticle extends VerticleBase {
         TenantController tenantController = new TenantController(tenantService);
         OccupancyController occupancyController = new OccupancyController(occupancyService);
         PaymentController paymentController = new PaymentController(paymentService);
+        MaintenanceController maintenanceController = new MaintenanceController(maintenanceService);
         JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
         Handler<RoutingContext> staffOnly = RoleHandler.requireRole(Role.ADMIN, Role.MANAGER);
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
@@ -131,6 +137,11 @@ public class MainVerticle extends VerticleBase {
         router.route("/api/admin*").handler(jwtAuth).handler(RoleHandler.requireRole(Role.ADMIN));
         router.get("/api/admin/test").handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
         router.patch("/api/admin/users/:id/role").handler(userController::changeRole);
+
+        // A tenant may read their own maintenance history, so this route is added BEFORE the staff-only
+        // /api/tenants* guard below. Vert.x runs matching routes in the order they were added, and this route
+        // ends the request, so the guard never runs for it. MaintenanceService checks that it is their own history.
+        router.get("/api/tenants/:tenantId/maintenance").handler(jwtAuth).handler(maintenanceController::tenantHistory);
 
         // Property/room/bed/tenant/payment management: protect each whole path prefix once, so every endpoint
         // under it (including ones added later) requires a valid JWT and an ADMIN or MANAGER role
@@ -174,6 +185,16 @@ public class MainVerticle extends VerticleBase {
         router.get("/api/payments/:id").handler(paymentController::get);
         router.put("/api/payments/:id").handler(paymentController::update);
         router.get("/api/tenants/:tenantId/payments").handler(paymentController::tenantHistory);
+
+        // Maintenance: tenants use it too, so the whole prefix only requires a valid JWT. Staff-only actions add
+        // the role check per route; "is this the tenant's own issue?" is checked in MaintenanceService.
+        router.route("/api/maintenance*").handler(jwtAuth);
+        router.post("/api/maintenance").handler(maintenanceController::create);
+        router.get("/api/maintenance").handler(staffOnly).handler(maintenanceController::list);
+        router.get("/api/maintenance/:id").handler(maintenanceController::get);
+        router.put("/api/maintenance/:id").handler(maintenanceController::update);
+        router.patch("/api/maintenance/:id/assign").handler(staffOnly).handler(maintenanceController::assign);
+        router.patch("/api/maintenance/:id/status").handler(staffOnly).handler(maintenanceController::changeStatus);
 
         // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
         router.route().failureHandler(errorHandler);

@@ -171,7 +171,7 @@ class PaymentApiIntegrationTest extends ApiTestBase {
         createPayment(tenantId, "2026-11", "PAID");
         assertEquals(2, getArray("/api/tenants/" + tenantId + "/payments").size());
         assertError(send(DELETE, "/api/tenants/" + tenantId, token, null), 409, "CONFLICT",
-                "Tenant cannot be deleted because they have occupancy or payment history");
+                "Tenant cannot be deleted because they have occupancy, payment or maintenance history");
     }
 
     // ---------- errors ----------

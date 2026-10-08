@@ -160,7 +160,7 @@ class TenantServiceTest {
         Tenant tenant = tenant(TenantStatus.CHECKED_OUT);
         when(tenantRepository.findById(tenant.id())).thenReturn(Future.succeededFuture(Optional.of(tenant)));
         when(tenantRepository.delete(tenant.id())).thenReturn(Future.failedFuture(
-                new ConflictException("Tenant cannot be deleted because they have occupancy or payment history")));
+                new ConflictException("Tenant cannot be deleted because they have occupancy, payment or maintenance history")));
 
         assertInstanceOf(ConflictException.class, awaitFailure(tenantService.delete(tenant.id())));
     }

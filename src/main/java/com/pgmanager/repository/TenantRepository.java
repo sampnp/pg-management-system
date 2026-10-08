@@ -82,13 +82,16 @@ public class TenantRepository {
                 .mapEmpty();
     }
 
-    /** Returns false if no tenant has this id. Fails with 409 if occupancy history or payments reference the tenant. */
+    /**
+     * Returns false if no tenant has this id. Fails with 409 if occupancy history, payments or maintenance issues
+     * reference the tenant. The tenant's login account (if any) is deleted with them (ON DELETE CASCADE).
+     */
     public Future<Boolean> delete(UUID id) {
         return pool.preparedQuery("DELETE FROM tenants WHERE id = $1")
                 .execute(Tuple.of(id))
                 .map(rows -> rows.rowCount() > 0)
                 .recover(err -> Future.failedFuture(DbUtils.isForeignKeyViolation(err)
-                        ? new ConflictException("Tenant cannot be deleted because they have occupancy or payment history")
+                        ? new ConflictException("Tenant cannot be deleted because they have occupancy, payment or maintenance history")
                         : err));
     }
 
