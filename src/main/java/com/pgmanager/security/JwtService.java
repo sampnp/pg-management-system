@@ -16,7 +16,7 @@ import java.util.UUID;
 
 /**
  * Issues and verifies JWTs signed with HMAC-SHA256 (HS256) using vertx-auth-jwt.
- * Token claims: sub (user id), email, role, iat (issued at), exp (expiry).
+ * Token claims: sub (user id), email, role, iat (issued at), exp (expiry), and tenantId for TENANT users.
  */
 public class JwtService {
 
@@ -37,6 +37,9 @@ public class JwtService {
         JsonObject claims = new JsonObject()
                 .put("email", user.email())
                 .put("role", user.role().name());
+        if (user.tenantId() != null) {
+            claims.put("tenantId", user.tenantId().toString());
+        }
 
         JWTOptions options = new JWTOptions()
                 .setAlgorithm(ALGORITHM)
@@ -54,10 +57,12 @@ public class JwtService {
         return jwtAuth.authenticate(new TokenCredentials(token))
                 .map(user -> {
                     JsonObject claims = user.principal();
+                    String tenantId = claims.getString("tenantId");
                     return new AuthUser(
                             UUID.fromString(claims.getString("sub")),
                             claims.getString("email"),
-                            Role.valueOf(claims.getString("role")));
+                            Role.valueOf(claims.getString("role")),
+                            tenantId == null ? null : UUID.fromString(tenantId));
                 });
     }
 }

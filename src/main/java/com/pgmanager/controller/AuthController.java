@@ -3,6 +3,7 @@ package com.pgmanager.controller;
 import com.pgmanager.dto.LoginRequest;
 import com.pgmanager.dto.LoginResponse;
 import com.pgmanager.dto.RegisterRequest;
+import com.pgmanager.dto.TenantAccountRequest;
 import com.pgmanager.dto.UserResponse;
 import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.service.AuthService;
@@ -37,6 +38,16 @@ public class AuthController {
         LoginRequest request = ctx.body().asPojo(LoginRequest.class);
         authService.login(request)
                 .onSuccess(token -> ctx.json(new LoginResponse(token)))
+                .onFailure(ctx::fail);
+    }
+
+    /** POST /api/tenants/:tenantId/account - staff create the login a tenant uses to report maintenance issues. */
+    public void createTenantAccount(RoutingContext ctx) {
+        authService.createTenantAccount(PathParams.uuid(ctx, "tenantId"), ctx.body().asPojo(TenantAccountRequest.class))
+                .onSuccess(user -> {
+                    ctx.response().setStatusCode(201);
+                    ctx.json(UserResponse.from(user));
+                })
                 .onFailure(ctx::fail);
     }
 

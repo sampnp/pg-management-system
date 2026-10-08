@@ -3,11 +3,16 @@ package com.pgmanager.service;
 import com.pgmanager.config.JwtConfig;
 import com.pgmanager.dto.LoginRequest;
 import com.pgmanager.dto.RegisterRequest;
+import com.pgmanager.dto.TenantAccountRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
+import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.exception.UnauthorizedException;
 import com.pgmanager.model.Role;
+import com.pgmanager.model.Tenant;
+import com.pgmanager.model.TenantStatus;
 import com.pgmanager.model.User;
+import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.AuthUser;
 import com.pgmanager.security.JwtService;
@@ -22,7 +27,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -50,6 +57,7 @@ class AuthServiceTest {
     // Low BCrypt cost keeps the tests fast
     private final PasswordHasher passwordHasher = new PasswordHasher(4);
     private UserRepository userRepository;
+    private TenantRepository tenantRepository;
     private JwtService jwtService;
     private AuthService authService;
 
@@ -66,8 +74,9 @@ class AuthServiceTest {
     @BeforeEach
     void setUp() {
         userRepository = mock(UserRepository.class);
+        tenantRepository = mock(TenantRepository.class);
         jwtService = new JwtService(vertx, new JwtConfig("unit-test-secret-that-is-at-least-32-chars", 3600));
-        authService = new AuthService(vertx, userRepository, passwordHasher, jwtService);
+        authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService);
     }
 
     // ---------- registration ----------
@@ -143,6 +152,68 @@ class AuthServiceTest {
         verifyNoInteractions(userRepository);
     }
 
+    // ---------- tenant accounts ----------
+
+    @Test
+    void tenantAccountIsLinkedToTheTenantAndUsesTheirName() throws Exception {
+        UUID tenantId = UUID.randomUUID();
+        when(tenantRepository.findById(tenantId)).thenReturn(Future.succeededFuture(Optional.of(tenant(tenantId))));
+        when(userRepository.findByEmail("ravi@example.com")).thenReturn(Future.succeededFuture(Optional.empty()));
+        when(userRepository.insertTenantUser(anyString(), anyString(), anyString(), any())).thenAnswer(call -> Future.succeededFuture(
+                new User(UUID.randomUUID(), call.getArgument(0), call.getArgument(1), call.getArgument(2), Role.TENANT,
+                        Instant.now(), call.getArgument(3))));
+
+        User user = await(authService.createTenantAccount(tenantId, new TenantAccountRequest(" Ravi@Example.com ", "password123")));
+
+        assertEquals("Ravi Kumar", user.name());
+        assertEquals("ravi@example.com", user.email());
+        assertEquals(Role.TENANT, user.role());
+        assertEquals(tenantId, user.tenantId());
+        assertTrue(passwordHasher.matches("password123", user.passwordHash()));
+        verify(userRepository, never()).insert(any(), any(), any(), any());
+    }
+
+    @Test
+    void tenantAccountForUnknownTenantFailsWith404() throws Exception {
+        UUID tenantId = UUID.randomUUID();
+        when(tenantRepository.findById(tenantId)).thenReturn(Future.succeededFuture(Optional.empty()));
+
+        Throwable error = awaitFailure(authService.createTenantAccount(tenantId, new TenantAccountRequest("ravi@example.com", "password123")));
+
+        assertInstanceOf(NotFoundException.class, error);
+        verify(userRepository, never()).insertTenantUser(any(), any(), any(), any());
+    }
+
+    @Test
+    void tenantAccountWithTakenEmailFailsWith409() throws Exception {
+        UUID tenantId = UUID.randomUUID();
+        when(tenantRepository.findById(tenantId)).thenReturn(Future.succeededFuture(Optional.of(tenant(tenantId))));
+        when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(storedUser("password123"))));
+
+        Throwable error = awaitFailure(authService.createTenantAccount(tenantId, new TenantAccountRequest("sambit@example.com", "password123")));
+
+        assertInstanceOf(ConflictException.class, error);
+        verify(userRepository, never()).insertTenantUser(any(), any(), any(), any());
+    }
+
+    static Stream<Arguments> invalidTenantAccounts() {
+        return Stream.of(
+                Arguments.of(null, "Request body is required"),
+                Arguments.of(new TenantAccountRequest(null, "password123"), "email is required"),
+                Arguments.of(new TenantAccountRequest("not-an-email", "password123"), "email is not valid"),
+                Arguments.of(new TenantAccountRequest("ravi@example.com", "short"), "password must be at least 8 characters"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidTenantAccounts")
+    void invalidTenantAccountFailsWith400(TenantAccountRequest request, String expectedMessage) throws Exception {
+        Throwable error = awaitFailure(authService.createTenantAccount(UUID.randomUUID(), request));
+
+        assertInstanceOf(BadRequestException.class, error);
+        assertEquals(expectedMessage, error.getMessage());
+        verifyNoInteractions(userRepository, tenantRepository);
+    }
+
     // ---------- login ----------
 
     @Test
@@ -183,6 +254,11 @@ class AuthServiceTest {
 
         assertInstanceOf(BadRequestException.class, error);
         verifyNoInteractions(userRepository);
+    }
+
+    private static Tenant tenant(UUID id) {
+        return new Tenant(id, "Ravi Kumar", "9876543210", null, LocalDate.of(2026, 10, 1), new BigDecimal("8500"),
+                BigDecimal.ZERO, TenantStatus.ACTIVE, Instant.now());
     }
 
     private User storedUser(String password) {

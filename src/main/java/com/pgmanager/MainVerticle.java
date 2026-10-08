@@ -83,15 +83,15 @@ public class MainVerticle extends VerticleBase {
     private Router createRouter() {
         // Manual dependency injection: build each object once and pass it to whoever needs it
         UserRepository userRepository = new UserRepository(pool);
+        TenantRepository tenantRepository = new TenantRepository(pool);
         PasswordHasher passwordHasher = new PasswordHasher(PasswordHasher.DEFAULT_COST);
         JwtService jwtService = new JwtService(vertx, config.jwt());
-        AuthService authService = new AuthService(vertx, userRepository, passwordHasher, jwtService);
+        AuthService authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService);
         UserService userService = new UserService(userRepository);
 
         PropertyRepository propertyRepository = new PropertyRepository(pool);
         RoomRepository roomRepository = new RoomRepository(pool);
         BedRepository bedRepository = new BedRepository(pool);
-        TenantRepository tenantRepository = new TenantRepository(pool);
         TenantBedHistoryRepository historyRepository = new TenantBedHistoryRepository();
         PaymentRepository paymentRepository = new PaymentRepository(pool);
         PropertyService propertyService = new PropertyService(propertyRepository);
@@ -167,6 +167,7 @@ public class MainVerticle extends VerticleBase {
         router.post("/api/tenants/:tenantId/check-out").handler(occupancyController::checkOut);
         router.get("/api/tenants/:tenantId/bed").handler(occupancyController::currentBed);
         router.get("/api/tenants/:tenantId/history").handler(occupancyController::history);
+        router.post("/api/tenants/:tenantId/account").handler(authController::createTenantAccount);
 
         router.post("/api/payments").handler(paymentController::create);
         router.get("/api/payments").handler(paymentController::list);

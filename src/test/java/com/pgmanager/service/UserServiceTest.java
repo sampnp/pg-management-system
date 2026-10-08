@@ -2,6 +2,7 @@ package com.pgmanager.service;
 
 import com.pgmanager.dto.RoleRequest;
 import com.pgmanager.exception.BadRequestException;
+import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.ForbiddenException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Role;
@@ -24,7 +25,9 @@ import static com.pgmanager.TestFutures.await;
 import static com.pgmanager.TestFutures.awaitFailure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -44,7 +47,9 @@ class UserServiceTest {
 
     @Test
     void adminCanPromoteAUser() throws Exception {
+        User manager = new User(userId, "Sambit", "sambit@example.com", "hash", Role.MANAGER, Instant.now());
         User promoted = new User(userId, "Sambit", "sambit@example.com", "hash", Role.ADMIN, Instant.now());
+        when(userRepository.findById(userId)).thenReturn(Future.succeededFuture(Optional.of(manager)));
         when(userRepository.updateRole(userId, Role.ADMIN)).thenReturn(Future.succeededFuture(Optional.of(promoted)));
 
         User result = await(userService.changeRole(admin, userId, new RoleRequest(" admin ")));
@@ -82,7 +87,8 @@ class UserServiceTest {
                 Arguments.of(null, "Request body is required"),
                 Arguments.of(new RoleRequest(null), "role is required"),
                 Arguments.of(new RoleRequest("  "), "role is required"),
-                Arguments.of(new RoleRequest("OWNER"), "role must be ADMIN or MANAGER"));
+                Arguments.of(new RoleRequest("OWNER"), "role must be ADMIN or MANAGER"),
+                Arguments.of(new RoleRequest("TENANT"), "role must be ADMIN or MANAGER"));
     }
 
     @ParameterizedTest
@@ -105,8 +111,20 @@ class UserServiceTest {
     }
 
     @Test
+    void tenantAccountCannotBePromoted() throws Exception {
+        User tenantUser = new User(userId, "Ravi", "ravi@example.com", "hash", Role.TENANT, Instant.now(), UUID.randomUUID());
+        when(userRepository.findById(userId)).thenReturn(Future.succeededFuture(Optional.of(tenantUser)));
+
+        Throwable error = awaitFailure(userService.changeRole(admin, userId, new RoleRequest("ADMIN")));
+
+        assertInstanceOf(ConflictException.class, error);
+        assertEquals("The role of a tenant account cannot be changed", error.getMessage());
+        verify(userRepository, never()).updateRole(any(), any());
+    }
+
+    @Test
     void unknownUserFailsWith404() throws Exception {
-        when(userRepository.updateRole(userId, Role.ADMIN)).thenReturn(Future.succeededFuture(Optional.empty()));
+        when(userRepository.findById(userId)).thenReturn(Future.succeededFuture(Optional.empty()));
 
         Throwable error = awaitFailure(userService.changeRole(admin, userId, new RoleRequest("ADMIN")));
 

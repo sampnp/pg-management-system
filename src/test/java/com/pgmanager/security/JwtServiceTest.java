@@ -22,6 +22,7 @@ import static com.pgmanager.TestFutures.await;
 import static com.pgmanager.TestFutures.awaitFailure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 class JwtServiceTest {
 
@@ -53,6 +54,18 @@ class JwtServiceTest {
         assertEquals(user.id(), authUser.id());
         assertEquals("sambit@example.com", authUser.email());
         assertEquals(Role.MANAGER, authUser.role());
+    }
+
+    @Test
+    void tenantTokenCarriesTheTenantIdAndStaffTokenDoesNot() throws Exception {
+        UUID tenantId = UUID.randomUUID();
+        User tenantUser = new User(UUID.randomUUID(), "Ravi", "ravi@example.com", "hash", Role.TENANT, Instant.now(), tenantId);
+
+        AuthUser authUser = await(jwtService.verify(jwtService.generateToken(tenantUser)));
+
+        assertEquals(Role.TENANT, authUser.role());
+        assertEquals(tenantId, authUser.tenantId());
+        assertNull(await(jwtService.verify(jwtService.generateToken(user))).tenantId());
     }
 
     @Test
