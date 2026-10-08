@@ -82,6 +82,7 @@ class PaymentServiceTest {
         assertEquals(PaymentMethod.UPI, payment.paymentMethod());
         assertEquals(PaymentStatus.PAID, payment.status());
         assertEquals("UPI123456", payment.receiptId());
+        verify(dashboardCache).invalidate();
     }
 
     @ParameterizedTest
@@ -235,6 +236,8 @@ class PaymentServiceTest {
                 null, new BigDecimal("8500"), "2026-10", "2026-10-09", "BANK_TRANSFER", "PAID", "NEFT42")));
 
         assertEquals(corrected, result);
+        // PENDING -> PAID moves money between the dashboard's pending and paid totals
+        verify(dashboardCache).invalidate();
     }
 
     @Test
@@ -247,6 +250,7 @@ class PaymentServiceTest {
         assertInstanceOf(BadRequestException.class, error);
         assertEquals("tenantId of a payment cannot be changed", error.getMessage());
         verify(paymentRepository, never()).update(any(), any(), any(), any(), any(), any(), any());
+        verify(dashboardCache, never()).invalidate();
     }
 
     @Test

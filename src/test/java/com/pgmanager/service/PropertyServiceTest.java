@@ -24,6 +24,7 @@ import static com.pgmanager.TestFutures.awaitFailure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -52,6 +53,7 @@ class PropertyServiceTest {
 
         assertEquals(saved, result);
         verify(propertyRepository).create("Sunrise PG", "123 Main Road", "Hyderabad");
+        verify(dashboardCache).invalidate();
     }
 
     static Stream<Arguments> invalidRequests() {
@@ -80,6 +82,8 @@ class PropertyServiceTest {
         when(propertyRepository.findAll()).thenReturn(Future.succeededFuture(properties));
 
         assertEquals(properties, await(propertyService.findAll()));
+        // Reads never touch the dashboard cache
+        verify(dashboardCache, never()).invalidate();
     }
 
     @Test
@@ -110,6 +114,8 @@ class PropertyServiceTest {
         Property result = await(propertyService.update(updated.id(), new PropertyRequest("New Name", "123 Main Road", "Hyderabad")));
 
         assertEquals("New Name", result.name());
+        // A new name changes no number on the dashboard
+        verify(dashboardCache, never()).invalidate();
     }
 
     @Test
@@ -128,6 +134,7 @@ class PropertyServiceTest {
         await(propertyService.delete(id));
 
         verify(propertyRepository).delete(id);
+        verify(dashboardCache).invalidate();
     }
 
     @Test

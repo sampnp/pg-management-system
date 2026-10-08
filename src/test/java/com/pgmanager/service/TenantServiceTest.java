@@ -63,6 +63,7 @@ class TenantServiceTest {
 
         assertEquals(saved, result);
         verify(tenantRepository).create("Sambit Behera", "+918599800080", "sambit@example.com", JOINING_DATE, RENT, DEPOSIT);
+        verify(dashboardCache).invalidate();
     }
 
     @Test
@@ -127,6 +128,8 @@ class TenantServiceTest {
                 request("Sambit Behera", "9876543210", null, "2026-10-10", new BigDecimal("9000"), DEPOSIT)));
 
         assertEquals(updated, result);
+        // Personal details are not counted on the dashboard
+        verify(dashboardCache, never()).invalidate();
     }
 
     @Test
@@ -147,6 +150,7 @@ class TenantServiceTest {
         await(tenantService.delete(tenant.id()));
 
         verify(tenantRepository).delete(tenant.id());
+        verify(dashboardCache).invalidate();
     }
 
     @Test
@@ -158,6 +162,8 @@ class TenantServiceTest {
 
         assertInstanceOf(ConflictException.class, error);
         verify(tenantRepository, never()).delete(any());
+        // A failed write leaves the cached dashboard alone
+        verify(dashboardCache, never()).invalidate();
     }
 
     @Test

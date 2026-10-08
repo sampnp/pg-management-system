@@ -92,6 +92,8 @@ class OccupancyServiceTest {
         order.verify(historyRepository).insert(tx, tenantId, bedId);
         order.verify(bedRepository).updateStatus(tx, bedId, BedStatus.OCCUPIED);
         order.verify(tenantRepository).updateStatus(tx, tenantId, TenantStatus.ACTIVE);
+        // Bed and tenant counts changed
+        verify(dashboardCache).invalidate();
     }
 
     @Test
@@ -189,6 +191,7 @@ class OccupancyServiceTest {
         order.verify(historyRepository).close(tx, currentStay.id());
         order.verify(bedRepository).updateStatus(tx, bedId, BedStatus.AVAILABLE);
         order.verify(tenantRepository).updateStatus(tx, tenantId, TenantStatus.CHECKED_OUT);
+        verify(dashboardCache).invalidate();
     }
 
     @Test

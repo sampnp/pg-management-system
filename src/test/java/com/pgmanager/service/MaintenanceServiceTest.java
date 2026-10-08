@@ -86,6 +86,7 @@ class MaintenanceServiceTest {
                 request(null, "  Tap leaking ", " Since morning ", "plumbing", " high ")));
 
         assertEquals(created, result);
+        verify(dashboardCache).invalidate();
     }
 
     @Test
@@ -351,6 +352,8 @@ class MaintenanceServiceTest {
         await(maintenanceService.assign(issue.id(), new AssignRequest(staff.id().toString())));
 
         verify(maintenanceRepository).assign(issue.id(), staff.id(), MaintenanceStatus.OPEN);
+        // The dashboard does not count assignments
+        verify(dashboardCache, never()).invalidate();
     }
 
     @Test
@@ -425,6 +428,7 @@ class MaintenanceServiceTest {
         await(maintenanceService.changeStatus(issue.id(), new MaintenanceStatusRequest(to.name().toLowerCase())));
 
         verify(maintenanceRepository).changeStatus(issue.id(), to, from);
+        verify(dashboardCache).invalidate();
     }
 
     static Stream<Arguments> forbiddenMoves() {
@@ -447,6 +451,7 @@ class MaintenanceServiceTest {
         assertInstanceOf(ConflictException.class, error);
         assertEquals("Cannot change status from " + from + " to " + to, error.getMessage());
         verify(maintenanceRepository, never()).changeStatus(any(), any(), any());
+        verify(dashboardCache, never()).invalidate();
     }
 
     @Test
