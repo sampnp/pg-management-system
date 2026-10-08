@@ -4,18 +4,23 @@ import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.Database;
 import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.HealthController;
+import com.pgmanager.controller.PropertyController;
 import com.pgmanager.exception.GlobalErrorHandler;
 import com.pgmanager.model.Role;
+import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.security.JwtService;
 import com.pgmanager.security.PasswordHasher;
 import com.pgmanager.security.RoleHandler;
 import com.pgmanager.service.AuthService;
+import com.pgmanager.service.PropertyService;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.VerticleBase;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
+import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.sqlclient.Pool;
 import org.slf4j.Logger;
@@ -61,9 +66,14 @@ public class MainVerticle extends VerticleBase {
         JwtService jwtService = new JwtService(vertx, config.jwt());
         AuthService authService = new AuthService(vertx, userRepository, passwordHasher, jwtService);
 
+        PropertyRepository propertyRepository = new PropertyRepository(pool);
+        PropertyService propertyService = new PropertyService(propertyRepository);
+
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
+        PropertyController propertyController = new PropertyController(propertyService);
         JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
+        Handler<RoutingContext> staffOnly = RoleHandler.requireRole(Role.ADMIN, Role.MANAGER);
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
 
         Router router = Router.router(vertx);
@@ -82,6 +92,16 @@ public class MainVerticle extends VerticleBase {
                 .handler(jwtAuth)
                 .handler(RoleHandler.requireRole(Role.ADMIN))
                 .handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
+
+        // Property management: protect the whole path prefix once, so every endpoint under it
+        // (including ones added later) requires a valid JWT and an ADMIN or MANAGER role
+        router.route("/api/properties*").handler(jwtAuth).handler(staffOnly);
+
+        router.post("/api/properties").handler(propertyController::create);
+        router.get("/api/properties").handler(propertyController::list);
+        router.get("/api/properties/:id").handler(propertyController::get);
+        router.put("/api/properties/:id").handler(propertyController::update);
+        router.delete("/api/properties/:id").handler(propertyController::delete);
 
         // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
         router.route().failureHandler(errorHandler);
