@@ -20,6 +20,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -53,7 +54,7 @@ class RoomServiceTest {
         roomRepository = mock(RoomRepository.class);
         bedRepository = mock(BedRepository.class);
         dashboardCache = mock(DashboardCache.class);
-        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        when(dashboardCache.invalidate(any())).thenReturn(Future.succeededFuture());
         roomService = new RoomService(propertyRepository, roomRepository, bedRepository, dashboardCache);
     }
 
@@ -150,9 +151,22 @@ class RoomServiceTest {
     @Test
     void deleteMissingRoomFailsWith404() throws Exception {
         UUID id = UUID.randomUUID();
-        when(roomRepository.delete(id)).thenReturn(Future.succeededFuture(false));
+        when(roomRepository.findById(id)).thenReturn(Future.succeededFuture(Optional.empty()));
 
         assertInstanceOf(NotFoundException.class, awaitFailure(roomService.delete(id)));
+        verify(roomRepository, never()).delete(any());
+        verify(dashboardCache, never()).invalidate(any());
+    }
+
+    @Test
+    void deleteClearsTheDashboardOfTheRoomsProperty() throws Exception {
+        Room room = new Room(UUID.randomUUID(), propertyId, "101", 2);
+        when(roomRepository.findById(room.id())).thenReturn(Future.succeededFuture(Optional.of(room)));
+        when(roomRepository.delete(room.id())).thenReturn(Future.succeededFuture(true));
+
+        await(roomService.delete(room.id()));
+
+        verify(dashboardCache).invalidate(Set.of(propertyId));
     }
 
     private void propertyExists(boolean exists) {

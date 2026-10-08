@@ -187,6 +187,7 @@ public class MainVerticle extends VerticleBase {
         router.get("/api/properties/:id").handler(propertyController::get);
         router.put("/api/properties/:id").handler(propertyController::update);
         router.delete("/api/properties/:id").handler(propertyController::delete);
+        router.get("/api/properties/:propertyId/dashboard").handler(dashboardController::getProperty);
 
         router.post("/api/properties/:propertyId/rooms").handler(roomController::create);
         router.get("/api/properties/:propertyId/rooms").handler(roomController::listByProperty);

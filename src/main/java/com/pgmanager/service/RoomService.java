@@ -13,6 +13,7 @@ import com.pgmanager.repository.RoomRepository;
 import io.vertx.core.Future;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 public class RoomService {
@@ -40,7 +41,7 @@ public class RoomService {
                 // Never trust the id in the URL: the property must really exist (404 otherwise)
                 .compose(valid -> requireProperty(propertyId)
                         .compose(property -> roomRepository.create(propertyId, valid.roomNumber(), valid.capacity())))
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(saved -> dashboardCache.invalidate(Set.of(propertyId)).map(saved));
     }
 
     public Future<List<Room>> listByProperty(UUID propertyId) {
@@ -69,14 +70,16 @@ public class RoomService {
     }
 
     public Future<Void> delete(UUID id) {
-        return roomRepository.delete(id)
-                .map(deleted -> {
-                    if (!deleted) {
-                        throw new NotFoundException(ROOM_NOT_FOUND);
-                    }
-                    return null;
-                })
-                .compose(v -> dashboardCache.invalidate());
+        // Read the room first: after the delete we still need to know which property's dashboard changed
+        return findById(id)
+                .compose(room -> roomRepository.delete(id)
+                        .map(deleted -> {
+                            if (!deleted) {
+                                throw new NotFoundException(ROOM_NOT_FOUND);
+                            }
+                            return room.propertyId();
+                        }))
+                .compose(propertyId -> dashboardCache.invalidate(Set.of(propertyId)));
     }
 
     private Future<Property> requireProperty(UUID propertyId) {

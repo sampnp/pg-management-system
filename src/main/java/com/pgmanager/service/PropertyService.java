@@ -8,6 +8,7 @@ import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PropertyRepository;
 import io.vertx.core.Future;
 
+import java.util.Set;
 import java.util.UUID;
 
 public class PropertyService {
@@ -31,7 +32,8 @@ public class PropertyService {
         return Future.succeededFuture(request)
                 .map(PropertyService::validate)
                 .compose(valid -> propertyRepository.create(valid.name(), valid.address(), valid.city()))
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                // A new property has no dashboard of its own yet; only the PG-wide counts change
+                .compose(saved -> dashboardCache.invalidate(Set.of()).map(saved));
     }
 
     /** ?page=0&size=20, newest first. An invalid page or size throws inside compose() -> 400. */
@@ -60,7 +62,7 @@ public class PropertyService {
                     }
                     return null;
                 })
-                .compose(v -> dashboardCache.invalidate());
+                .compose(v -> dashboardCache.invalidate(Set.of(id)));
     }
 
     /** Returns a copy with trimmed values, or throws BadRequestException. */

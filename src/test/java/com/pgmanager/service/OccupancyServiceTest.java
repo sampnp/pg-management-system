@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static com.pgmanager.TestFutures.await;
@@ -63,7 +64,7 @@ class OccupancyServiceTest {
         bedRepository = mock(BedRepository.class);
         historyRepository = mock(TenantBedHistoryRepository.class);
         dashboardCache = mock(DashboardCache.class);
-        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        when(dashboardCache.invalidate(any())).thenReturn(Future.succeededFuture());
         occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository, dashboardCache);
 
         // Default answers for the write steps; individual tests override the lookups
@@ -92,8 +93,8 @@ class OccupancyServiceTest {
         order.verify(historyRepository).insert(tx, tenantId, bedId);
         order.verify(bedRepository).updateStatus(tx, bedId, BedStatus.OCCUPIED);
         order.verify(tenantRepository).updateStatus(tx, tenantId, TenantStatus.ACTIVE);
-        // Bed and tenant counts changed
-        verify(dashboardCache).invalidate();
+        // Bed and tenant counts changed, for the PG and for the bed's property
+        verify(dashboardCache).invalidate(Set.of(newStay.propertyId()));
     }
 
     @Test
@@ -191,7 +192,7 @@ class OccupancyServiceTest {
         order.verify(historyRepository).close(tx, currentStay.id());
         order.verify(bedRepository).updateStatus(tx, bedId, BedStatus.AVAILABLE);
         order.verify(tenantRepository).updateStatus(tx, tenantId, TenantStatus.CHECKED_OUT);
-        verify(dashboardCache).invalidate();
+        verify(dashboardCache).invalidate(Set.of(closedStay.propertyId()));
     }
 
     @Test

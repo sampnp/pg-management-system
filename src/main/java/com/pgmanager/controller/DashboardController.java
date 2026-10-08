@@ -12,6 +12,13 @@ public class DashboardController {
         this.dashboardService = dashboardService;
     }
 
+    /** GET /api/properties/:propertyId/dashboard */
+    public void getProperty(RoutingContext ctx) {
+        dashboardService.getPropertySummary(PathParams.uuid(ctx, "propertyId"))
+                .onSuccess(ctx::json)
+                .onFailure(ctx::fail);
+    }
+
     /** GET /api/dashboard */
     public void get(RoutingContext ctx) {
         dashboardService.getSummary()

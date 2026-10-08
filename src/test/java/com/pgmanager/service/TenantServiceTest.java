@@ -19,6 +19,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -48,7 +49,7 @@ class TenantServiceTest {
     void setUp() {
         tenantRepository = mock(TenantRepository.class);
         dashboardCache = mock(DashboardCache.class);
-        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        when(dashboardCache.invalidate(any())).thenReturn(Future.succeededFuture());
         tenantService = new TenantService(tenantRepository, dashboardCache);
     }
 
@@ -63,7 +64,7 @@ class TenantServiceTest {
 
         assertEquals(saved, result);
         verify(tenantRepository).create("Sambit Behera", "+918599800080", "sambit@example.com", JOINING_DATE, RENT, DEPOSIT);
-        verify(dashboardCache).invalidate();
+        verify(dashboardCache).invalidate(Set.of());
     }
 
     @Test
@@ -129,7 +130,7 @@ class TenantServiceTest {
 
         assertEquals(updated, result);
         // Personal details are not counted on the dashboard
-        verify(dashboardCache, never()).invalidate();
+        verify(dashboardCache, never()).invalidate(any());
     }
 
     @Test
@@ -150,7 +151,7 @@ class TenantServiceTest {
         await(tenantService.delete(tenant.id()));
 
         verify(tenantRepository).delete(tenant.id());
-        verify(dashboardCache).invalidate();
+        verify(dashboardCache).invalidate(Set.of());
     }
 
     @Test
@@ -163,7 +164,7 @@ class TenantServiceTest {
         assertInstanceOf(ConflictException.class, error);
         verify(tenantRepository, never()).delete(any());
         // A failed write leaves the cached dashboard alone
-        verify(dashboardCache, never()).invalidate();
+        verify(dashboardCache, never()).invalidate(any());
     }
 
     @Test

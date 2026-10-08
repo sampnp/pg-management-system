@@ -24,6 +24,7 @@ import io.vertx.core.Future;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -70,7 +71,7 @@ public class MaintenanceService {
                             .map(created -> created.orElseThrow(() ->
                                     new ConflictException("Tenant must be checked in to a bed to report an issue")));
                 })
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(saved -> dashboardCache.invalidate(Set.of(saved.propertyId())).map(saved));
     }
 
     public Future<MaintenanceIssue> findById(AuthUser caller, UUID id) {
@@ -122,7 +123,7 @@ public class MaintenanceService {
                         }))
                 .map(MaintenanceService::orConcurrentChange)
                 // The priority may have changed, which changes the dashboard's urgent count
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(saved -> dashboardCache.invalidate(Set.of(saved.propertyId())).map(saved));
     }
 
     /** Staff only (checked on the route). The assignee must be an existing ADMIN or MANAGER. */
@@ -165,7 +166,7 @@ public class MaintenanceService {
                             return maintenanceRepository.changeStatus(id, newStatus, existing.status());
                         }))
                 .map(MaintenanceService::orConcurrentChange)
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(saved -> dashboardCache.invalidate(Set.of(saved.propertyId())).map(saved));
     }
 
     /** All issues of a tenant, newest first, kept after check-out. Staff can see any tenant, a tenant only themselves. */

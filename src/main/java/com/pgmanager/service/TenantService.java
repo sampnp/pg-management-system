@@ -14,6 +14,7 @@ import io.vertx.core.Future;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -39,7 +40,7 @@ public class TenantService {
                 .map(TenantService::validate)
                 .compose(valid -> tenantRepository.create(valid.name(), valid.phone(), valid.email(),
                         valid.joiningDate(), valid.monthlyRent(), valid.securityDeposit()))
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(saved -> dashboardCache.invalidate(Set.of()).map(saved));
     }
 
     /** ?page=0&size=20, newest first. */
@@ -81,7 +82,8 @@ public class TenantService {
                     }
                     return null;
                 })
-                .compose(v -> dashboardCache.invalidate());
+                // Only a tenant who never stayed in a bed can be deleted, so no property dashboard changes
+                .compose(v -> dashboardCache.invalidate(Set.of()));
     }
 
     /** Validated and normalized tenant fields. */

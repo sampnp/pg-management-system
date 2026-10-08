@@ -18,6 +18,7 @@ import io.vertx.sqlclient.SqlConnection;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -67,7 +68,7 @@ public class OccupancyService {
                         .compose(v -> historyRepository.findCurrentByTenantId(tx, tenantId))
                         .map(Optional::orElseThrow)))
                 // Bed and tenant counts changed; cleared only after the transaction has committed
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(stay -> dashboardCache.invalidate(Set.of(stay.propertyId())).map(stay));
     }
 
     public Future<Occupancy> checkOut(UUID tenantId) {
@@ -81,7 +82,7 @@ public class OccupancyService {
                         .compose(bed -> tenantRepository.updateStatus(tx, tenantId, TenantStatus.CHECKED_OUT))
                         .compose(v -> historyRepository.findById(tx, stay.id())))
                 .map(Optional::orElseThrow))
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(stay -> dashboardCache.invalidate(Set.of(stay.propertyId())).map(stay));
     }
 
     /** The tenant's current stay; 404 if the tenant is not checked in anywhere. */

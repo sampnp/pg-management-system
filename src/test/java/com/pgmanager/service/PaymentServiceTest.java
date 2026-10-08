@@ -28,6 +28,7 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -61,7 +62,8 @@ class PaymentServiceTest {
         paymentRepository = mock(PaymentRepository.class);
         tenantRepository = mock(TenantRepository.class);
         dashboardCache = mock(DashboardCache.class);
-        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        when(dashboardCache.invalidate(any())).thenReturn(Future.succeededFuture());
+        when(paymentRepository.findPropertyIds(any(), any())).thenReturn(Future.succeededFuture(Set.of()));
         paymentService = new PaymentService(paymentRepository, tenantRepository, dashboardCache);
         // Echo back whatever the service asks the repository to save
         when(paymentRepository.create(any(), any(), any(), any(), any(), any(), any())).thenAnswer(call -> Future.succeededFuture(
@@ -84,7 +86,7 @@ class PaymentServiceTest {
         assertEquals(PaymentMethod.UPI, payment.paymentMethod());
         assertEquals(PaymentStatus.PAID, payment.status());
         assertEquals("UPI123456", payment.receiptId());
-        verify(dashboardCache).invalidate();
+        verify(dashboardCache).invalidate(Set.of());
     }
 
     @ParameterizedTest
@@ -242,7 +244,32 @@ class PaymentServiceTest {
 
         assertEquals(corrected, result);
         // PENDING -> PAID moves money between the dashboard's pending and paid totals
-        verify(dashboardCache).invalidate();
+        verify(dashboardCache).invalidate(Set.of());
+    }
+
+    @Test
+    void paymentClearsTheDashboardsOfThePropertiesTheTenantStayedInThatMonth() throws Exception {
+        tenantExists();
+        UUID propertyId = UUID.randomUUID();
+        when(paymentRepository.findPropertyIds(UUID.fromString(TENANT_ID), Set.of(OCTOBER)))
+                .thenReturn(Future.succeededFuture(Set.of(propertyId)));
+
+        await(paymentService.create(new PaymentRequest(TENANT_ID, AMOUNT, "2026-10", "2026-10-09", "UPI", "PAID", null)));
+
+        verify(dashboardCache).invalidate(Set.of(propertyId));
+    }
+
+    @Test
+    void updateLooksUpPropertiesForTheOldAndTheNewMonth() throws Exception {
+        Payment existing = payment(PaymentStatus.PENDING);   // October
+        Payment moved = new Payment(existing.id(), existing.tenantId(), AMOUNT, YearMonth.of(2026, 11), null, null,
+                PaymentStatus.PENDING, null, existing.createdAt(), existing.updatedAt());
+        when(paymentRepository.findById(existing.id())).thenReturn(Future.succeededFuture(Optional.of(existing)));
+        when(paymentRepository.update(any(), any(), any(), any(), any(), any(), any())).thenReturn(Future.succeededFuture(Optional.of(moved)));
+
+        await(paymentService.update(existing.id(), new PaymentRequest(null, AMOUNT, "2026-11", null, null, "PENDING", null)));
+
+        verify(paymentRepository).findPropertyIds(existing.tenantId(), Set.of(OCTOBER, YearMonth.of(2026, 11)));
     }
 
     @Test
@@ -255,7 +282,7 @@ class PaymentServiceTest {
         assertInstanceOf(BadRequestException.class, error);
         assertEquals("tenantId of a payment cannot be changed", error.getMessage());
         verify(paymentRepository, never()).update(any(), any(), any(), any(), any(), any(), any());
-        verify(dashboardCache, never()).invalidate();
+        verify(dashboardCache, never()).invalidate(any());
     }
 
     @Test

@@ -25,6 +25,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static com.pgmanager.TestFutures.await;
@@ -60,7 +61,9 @@ class BedServiceTest {
         bedRepository = mock(BedRepository.class);
         historyRepository = mock(TenantBedHistoryRepository.class);
         dashboardCache = mock(DashboardCache.class);
-        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        when(dashboardCache.invalidate(any())).thenReturn(Future.succeededFuture());
+        // Every bed in these tests is in this room; the dashboard of the room's property is the one cleared
+        when(roomRepository.findById(room.id())).thenReturn(Future.succeededFuture(Optional.of(room)));
         bedService = new BedService(pool, roomRepository, bedRepository, historyRepository, dashboardCache);
     }
 
@@ -148,6 +151,7 @@ class BedServiceTest {
                 .thenReturn(Future.succeededFuture(Optional.of(new Bed(bedId, room.id(), "A", BedStatus.AVAILABLE))));
 
         assertEquals(BedStatus.AVAILABLE, await(bedService.updateStatus(bedId, new BedStatusRequest("AVAILABLE"))).status());
+        verify(dashboardCache).invalidate(Set.of(room.propertyId()));
     }
 
     @Test
@@ -227,6 +231,7 @@ class BedServiceTest {
         await(bedService.delete(bedId));
 
         verify(bedRepository).delete(bedId);
+        verify(dashboardCache).invalidate(Set.of(room.propertyId()));
     }
 
     private void roomExists(boolean exists) {

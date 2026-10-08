@@ -2,6 +2,8 @@ package com.pgmanager.service;
 
 import com.pgmanager.config.JsonConfig;
 import com.pgmanager.dto.DashboardSummary;
+import com.pgmanager.dto.PropertyDashboard;
+import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.DashboardRepository;
 import io.vertx.core.Future;
@@ -18,10 +20,14 @@ import java.math.BigDecimal;
 import java.net.ConnectException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 import static com.pgmanager.TestFutures.await;
 import static com.pgmanager.TestFutures.awaitFailure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -170,7 +176,7 @@ class DashboardServiceTest {
     void invalidateDeletesTheDashboardKey() throws Exception {
         when(redis.del(anyList())).thenReturn(Future.succeededFuture());
 
-        await(dashboardCache.invalidate());
+        await(dashboardCache.invalidate(Set.of()));
 
         verify(redis).del(List.of(KEY));
     }
@@ -180,7 +186,7 @@ class DashboardServiceTest {
         when(redis.del(anyList())).thenReturn(Future.failedFuture(new ConnectException("Connection refused")));
 
         // Completes normally: the write that triggered it must still succeed
-        await(dashboardCache.invalidate());
+        await(dashboardCache.invalidate(Set.of()));
 
         verify(redis).del(List.of(KEY));
     }
@@ -193,12 +199,79 @@ class DashboardServiceTest {
         verify(dashboardRepository, never()).loadSummary();
 
         when(redis.del(anyList())).thenReturn(Future.succeededFuture());
-        await(dashboardCache.invalidate());
+        await(dashboardCache.invalidate(Set.of()));
         cacheIsEmpty();
         when(redis.set(anyList())).thenReturn(Future.succeededFuture());
 
         await(dashboardService.getSummary());
         verify(dashboardRepository).loadSummary();
+    }
+
+    // ---------- property dashboard ----------
+
+    @Test
+    void propertyDashboardIsCachedUnderItsOwnKey() throws Exception {
+        UUID propertyId = UUID.randomUUID();
+        PropertyDashboard property = propertyDashboard(propertyId);
+        String key = "dashboard:property:" + propertyId;
+        when(redis.get(key)).thenReturn(Future.succeededFuture(null));
+        when(redis.set(anyList())).thenReturn(Future.succeededFuture());
+        when(dashboardRepository.loadPropertySummary(propertyId)).thenReturn(Future.succeededFuture(Optional.of(property)));
+
+        assertEquals(property, await(dashboardService.getPropertySummary(propertyId)));
+        verify(redis).set(List.of(key, Json.encode(property), "EX", "60"));
+
+        // Next request: served from that key
+        Response response = mock(Response.class);
+        when(response.toString()).thenReturn(Json.encode(property));
+        when(redis.get(key)).thenReturn(Future.succeededFuture(response));
+        assertEquals(property, await(dashboardService.getPropertySummary(propertyId)));
+        verify(dashboardRepository).loadPropertySummary(propertyId);
+    }
+
+    @Test
+    void unknownPropertyIs404AndNothingIsCached() throws Exception {
+        UUID propertyId = UUID.randomUUID();
+        when(redis.get(any())).thenReturn(Future.succeededFuture(null));
+        when(dashboardRepository.loadPropertySummary(propertyId)).thenReturn(Future.succeededFuture(Optional.empty()));
+
+        Throwable error = awaitFailure(dashboardService.getPropertySummary(propertyId));
+
+        assertInstanceOf(NotFoundException.class, error);
+        assertEquals("Property not found", error.getMessage());
+        verify(redis, never()).set(anyList());
+    }
+
+    @Test
+    void cachedPgWideJsonIsNotAcceptedAsAPropertyDashboard() throws Exception {
+        UUID propertyId = UUID.randomUUID();
+        Response response = mock(Response.class);
+        when(response.toString()).thenReturn(Json.encode(summary));
+        when(redis.get("dashboard:property:" + propertyId)).thenReturn(Future.succeededFuture(response));
+        when(redis.set(anyList())).thenReturn(Future.succeededFuture());
+        when(dashboardRepository.loadPropertySummary(propertyId)).thenReturn(Future.succeededFuture(Optional.of(propertyDashboard(propertyId))));
+
+        assertEquals(propertyId, await(dashboardService.getPropertySummary(propertyId)).propertyId());
+        verify(dashboardRepository).loadPropertySummary(propertyId);
+    }
+
+    @Test
+    void invalidateClearsThePgWideKeyAndOnlyTheChangedProperties() throws Exception {
+        UUID changed = UUID.randomUUID();
+        when(redis.del(anyList())).thenReturn(Future.succeededFuture());
+
+        await(dashboardCache.invalidate(Set.of(changed)));
+
+        verify(redis).del(List.of(KEY, "dashboard:property:" + changed));
+    }
+
+    private static PropertyDashboard propertyDashboard(UUID propertyId) {
+        return new PropertyDashboard(propertyId, 4,
+                new DashboardSummary.Beds(8, 3, 5),
+                new PropertyDashboard.Tenants(5, 2),
+                new DashboardSummary.Payments(10, 2, new BigDecimal("80000.00"), new BigDecimal("16000.00")),
+                new DashboardSummary.Maintenance(1, 1, 3, 0, 1),
+                Instant.parse("2026-10-09T10:15:30Z"));
     }
 
     private void cached(String json) {

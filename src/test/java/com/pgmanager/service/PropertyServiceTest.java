@@ -18,6 +18,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -25,6 +26,7 @@ import static com.pgmanager.TestFutures.await;
 import static com.pgmanager.TestFutures.awaitFailure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -42,7 +44,7 @@ class PropertyServiceTest {
     void setUp() {
         propertyRepository = mock(PropertyRepository.class);
         dashboardCache = mock(DashboardCache.class);
-        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        when(dashboardCache.invalidate(any())).thenReturn(Future.succeededFuture());
         propertyService = new PropertyService(propertyRepository, dashboardCache);
     }
 
@@ -55,7 +57,8 @@ class PropertyServiceTest {
 
         assertEquals(saved, result);
         verify(propertyRepository).create("Sunrise PG", "123 Main Road", "Hyderabad");
-        verify(dashboardCache).invalidate();
+        // A new property has no dashboard of its own yet: only the PG-wide one is cleared
+        verify(dashboardCache).invalidate(Set.of());
     }
 
     static Stream<Arguments> invalidRequests() {
@@ -85,7 +88,7 @@ class PropertyServiceTest {
 
         assertEquals(page, await(propertyService.list(null, "2")));
         // Reads never touch the dashboard cache
-        verify(dashboardCache, never()).invalidate();
+        verify(dashboardCache, never()).invalidate(any());
     }
 
     @Test
@@ -126,7 +129,7 @@ class PropertyServiceTest {
 
         assertEquals("New Name", result.name());
         // A new name changes no number on the dashboard
-        verify(dashboardCache, never()).invalidate();
+        verify(dashboardCache, never()).invalidate(any());
     }
 
     @Test
@@ -145,7 +148,7 @@ class PropertyServiceTest {
         await(propertyService.delete(id));
 
         verify(propertyRepository).delete(id);
-        verify(dashboardCache).invalidate();
+        verify(dashboardCache).invalidate(Set.of(id));
     }
 
     @Test

@@ -35,6 +35,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -71,7 +72,7 @@ class MaintenanceServiceTest {
         tenantRepository = mock(TenantRepository.class);
         userRepository = mock(UserRepository.class);
         dashboardCache = mock(DashboardCache.class);
-        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        when(dashboardCache.invalidate(any())).thenReturn(Future.succeededFuture());
         maintenanceService = new MaintenanceService(maintenanceRepository, tenantRepository, userRepository, dashboardCache);
     }
 
@@ -88,7 +89,8 @@ class MaintenanceServiceTest {
                 request(null, "  Tap leaking ", " Since morning ", "plumbing", " high ")));
 
         assertEquals(created, result);
-        verify(dashboardCache).invalidate();
+        // The PG-wide dashboard and the dashboard of the property the issue is in
+        verify(dashboardCache).invalidate(Set.of(created.propertyId()));
     }
 
     @Test
@@ -361,7 +363,7 @@ class MaintenanceServiceTest {
 
         verify(maintenanceRepository).assign(issue.id(), staff.id(), MaintenanceStatus.OPEN);
         // The dashboard does not count assignments
-        verify(dashboardCache, never()).invalidate();
+        verify(dashboardCache, never()).invalidate(any());
     }
 
     @Test
@@ -436,7 +438,7 @@ class MaintenanceServiceTest {
         await(maintenanceService.changeStatus(issue.id(), new MaintenanceStatusRequest(to.name().toLowerCase())));
 
         verify(maintenanceRepository).changeStatus(issue.id(), to, from);
-        verify(dashboardCache).invalidate();
+        verify(dashboardCache).invalidate(Set.of(issue.propertyId()));
     }
 
     static Stream<Arguments> forbiddenMoves() {
@@ -459,7 +461,7 @@ class MaintenanceServiceTest {
         assertInstanceOf(ConflictException.class, error);
         assertEquals("Cannot change status from " + from + " to " + to, error.getMessage());
         verify(maintenanceRepository, never()).changeStatus(any(), any(), any());
-        verify(dashboardCache, never()).invalidate();
+        verify(dashboardCache, never()).invalidate(any());
     }
 
     @Test

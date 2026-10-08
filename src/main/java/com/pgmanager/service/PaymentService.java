@@ -17,8 +17,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -47,7 +49,7 @@ public class PaymentService {
                 .compose(valid -> requireTenant(valid.tenantId())
                         .compose(tenant -> paymentRepository.create(valid.tenantId(), valid.amount(), valid.rentMonth(),
                                 valid.paymentDate(), valid.paymentMethod(), valid.status(), valid.receiptId())))
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(saved -> clearDashboards(saved, saved.rentMonth()));
     }
 
     public Future<Payment> findById(UUID id) {
@@ -79,11 +81,23 @@ public class PaymentService {
                                 return Future.failedFuture(new BadRequestException("tenantId of a payment cannot be changed"));
                             }
                             return paymentRepository.update(id, valid.amount(), valid.rentMonth(), valid.paymentDate(),
-                                    valid.paymentMethod(), valid.status(), valid.receiptId());
-                        }))
-                .map(updated -> updated.orElseThrow(() -> new NotFoundException(PAYMENT_NOT_FOUND)))
-                // Amount and status can change, so the payment totals can too
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                                            valid.paymentMethod(), valid.status(), valid.receiptId())
+                                    .map(updated -> updated.orElseThrow(() -> new NotFoundException(PAYMENT_NOT_FOUND)))
+                                    // Amount, status and month can change: clear the properties of the old and the new month
+                                    .compose(updated -> clearDashboards(updated, existing.rentMonth()));
+                        }));
+    }
+
+    /**
+     * Clears the PG-wide dashboard and the dashboards of the properties this payment counts for: the ones where
+     * the tenant stayed during the payment's rent month (and during otherMonth, the month before an update).
+     */
+    private Future<Payment> clearDashboards(Payment payment, YearMonth otherMonth) {
+        // A HashSet, because the two months are often the same (Set.of would refuse the duplicate)
+        Set<YearMonth> months = new HashSet<>(List.of(payment.rentMonth(), otherMonth));
+        return paymentRepository.findPropertyIds(payment.tenantId(), months)
+                .compose(propertyIds -> dashboardCache.invalidate(propertyIds))
+                .map(payment);
     }
 
     /** A tenant's payments, newest rent month first. 404 for an unknown tenant; empty list if they have none. */

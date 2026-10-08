@@ -17,6 +17,7 @@ import io.vertx.sqlclient.Pool;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 public class BedService {
@@ -50,9 +51,9 @@ public class BedService {
                                         return Future.failedFuture(new ConflictException(
                                                 "Room is full: it already has " + bedCount + " of " + room.capacity() + " beds"));
                                     }
-                                    return bedRepository.create(roomId, valid.bedNumber());
-                                })))
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                                    return bedRepository.create(roomId, valid.bedNumber())
+                                            .compose(saved -> dashboardCache.invalidate(Set.of(room.propertyId())).map(saved));
+                                })));
     }
 
     public Future<List<Bed>> listByRoom(UUID roomId) {
@@ -97,7 +98,9 @@ public class BedService {
                         })
                         .map(updated -> updated.orElseThrow(() -> new NotFoundException(BED_NOT_FOUND)))))
                 // After the transaction has committed, so the next dashboard request sees the new status
-                .compose(saved -> dashboardCache.invalidate().map(saved));
+                .compose(saved -> propertyOf(saved)
+                        .compose(propertyIds -> dashboardCache.invalidate(propertyIds))
+                        .map(saved));
     }
 
     public Future<Void> delete(UUID id) {
@@ -106,15 +109,21 @@ public class BedService {
                     if (bed.status() == BedStatus.OCCUPIED) {
                         return Future.failedFuture(new ConflictException("Cannot delete an occupied bed"));
                     }
-                    return bedRepository.delete(id);
+                    return bedRepository.delete(id)
+                            .map(deleted -> {
+                                if (!deleted) {
+                                    throw new NotFoundException(BED_NOT_FOUND);
+                                }
+                                return bed;
+                            });
                 })
-                .map(deleted -> {
-                    if (!deleted) {
-                        throw new NotFoundException(BED_NOT_FOUND);
-                    }
-                    return null;
-                })
-                .compose(v -> dashboardCache.invalidate());
+                .compose(bed -> propertyOf(bed).compose(propertyIds -> dashboardCache.invalidate(propertyIds)));
+    }
+
+    /** The property of a bed (through its room), for clearing that property's dashboard. */
+    private Future<Set<UUID>> propertyOf(Bed bed) {
+        return roomRepository.findById(bed.roomId())
+                .map(room -> room.map(r -> Set.of(r.propertyId())).orElse(Set.of()));
     }
 
     private Future<Room> requireRoom(UUID roomId) {
