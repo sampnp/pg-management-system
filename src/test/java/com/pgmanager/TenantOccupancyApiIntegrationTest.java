@@ -119,7 +119,8 @@ class TenantOccupancyApiIntegrationTest extends ApiTestBase {
     void listAndGetTenants() throws Exception {
         String tenantId = createTenant("Listed Tenant");
 
-        JsonArray tenants = getArray("/api/tenants");
+        // Newest first, so the tenant just created is on the first page
+        JsonArray tenants = getJson("/api/tenants").getJsonArray("items");
         assertTrue(tenants.stream().anyMatch(t -> tenantId.equals(((JsonObject) t).getString("id"))));
         assertEquals("Listed Tenant", getJson("/api/tenants/" + tenantId).getString("name"));
     }

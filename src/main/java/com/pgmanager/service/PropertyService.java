@@ -1,5 +1,6 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.Page;
 import com.pgmanager.dto.PropertyRequest;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Property;
@@ -7,7 +8,6 @@ import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PropertyRepository;
 import io.vertx.core.Future;
 
-import java.util.List;
 import java.util.UUID;
 
 public class PropertyService {
@@ -34,8 +34,10 @@ public class PropertyService {
                 .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
-    public Future<List<Property>> findAll() {
-        return propertyRepository.findAll();
+    /** ?page=0&size=20, newest first. An invalid page or size throws inside compose() -> 400. */
+    public Future<Page<Property>> list(String page, String size) {
+        return Future.succeededFuture()
+                .compose(v -> propertyRepository.findPage(Validation.pageRequest(page, size)));
     }
 
     public Future<Property> findById(UUID id) {

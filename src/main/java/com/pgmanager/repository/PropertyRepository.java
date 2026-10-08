@@ -2,6 +2,8 @@ package com.pgmanager.repository;
 
 import com.pgmanager.exception.ConflictException;
 import com.pgmanager.model.Property;
+import com.pgmanager.dto.Page;
+import com.pgmanager.dto.PageRequest;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
@@ -28,10 +30,11 @@ public class PropertyRepository {
                 .map(rows -> toProperty(rows.iterator().next()));
     }
 
-    public Future<List<Property>> findAll() {
-        return pool.query("SELECT " + COLUMNS + " FROM properties ORDER BY created_at, id")
-                .execute()
-                .map(rows -> DbUtils.mapAll(rows, PropertyRepository::toProperty));
+    /** Newest first. */
+    public Future<Page<Property>> findPage(PageRequest request) {
+        return DbUtils.page(pool, "SELECT count(*) FROM properties",
+                "SELECT " + COLUMNS + " FROM properties ORDER BY created_at DESC, id DESC",
+                Tuple.tuple(), request, PropertyRepository::toProperty);
     }
 
     public Future<Optional<Property>> findById(UUID id) {

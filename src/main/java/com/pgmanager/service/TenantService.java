@@ -1,5 +1,6 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.Page;
 import com.pgmanager.dto.TenantRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
@@ -12,7 +13,6 @@ import io.vertx.core.Future;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -42,8 +42,10 @@ public class TenantService {
                 .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
-    public Future<List<Tenant>> findAll() {
-        return tenantRepository.findAll();
+    /** ?page=0&size=20, newest first. */
+    public Future<Page<Tenant>> list(String page, String size) {
+        return Future.succeededFuture()
+                .compose(v -> tenantRepository.findPage(Validation.pageRequest(page, size)));
     }
 
     public Future<Tenant> findById(UUID id) {

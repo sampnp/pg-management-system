@@ -23,12 +23,14 @@ public class PaymentController {
                 .onFailure(ctx::fail);
     }
 
-    /** GET /api/payments?tenantId=...&status=PAID&rentMonth=2026-10 (all filters optional) */
+    /** GET /api/payments?tenantId=...&status=PAID&rentMonth=2026-10&page=0&size=20 (all optional) */
     public void list(RoutingContext ctx) {
         paymentService.list(
                         ctx.queryParams().get("tenantId"),
                         ctx.queryParams().get("status"),
-                        ctx.queryParams().get("rentMonth"))
+                        ctx.queryParams().get("rentMonth"),
+                        ctx.queryParams().get("page"),
+                        ctx.queryParams().get("size"))
                 .onSuccess(ctx::json)
                 .onFailure(ctx::fail);
     }

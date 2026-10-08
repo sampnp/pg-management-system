@@ -5,6 +5,8 @@ import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Payment;
 import com.pgmanager.model.PaymentMethod;
 import com.pgmanager.model.PaymentStatus;
+import com.pgmanager.dto.Page;
+import com.pgmanager.dto.PageRequest;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
@@ -23,7 +25,8 @@ public class PaymentRepository {
 
     private static final String COLUMNS =
             "id, tenant_id, amount, rent_month, payment_date, payment_method, status, receipt_id, created_at, updated_at";
-    private static final String NEWEST_FIRST = " ORDER BY rent_month DESC, created_at DESC";
+    /** id last, so payments created in the same instant still have a fixed order (stable pages) */
+    private static final String NEWEST_FIRST = " ORDER BY rent_month DESC, created_at DESC, id DESC";
 
     private final Pool pool;
 
@@ -55,6 +58,25 @@ public class PaymentRepository {
      * the filter values themselves are always sent as parameters.
      */
     public Future<List<Payment>> find(UUID tenantId, PaymentStatus status, YearMonth rentMonth) {
+        Filter filter = filter(tenantId, status, rentMonth);
+        return pool.preparedQuery("SELECT " + COLUMNS + " FROM payments" + filter.where() + NEWEST_FIRST)
+                .execute(filter.params())
+                .map(rows -> DbUtils.mapAll(rows, PaymentRepository::toPayment));
+    }
+
+    /** Same filters as find(), one page at a time. */
+    public Future<Page<Payment>> findPage(UUID tenantId, PaymentStatus status, YearMonth rentMonth, PageRequest request) {
+        Filter filter = filter(tenantId, status, rentMonth);
+        return DbUtils.page(pool, "SELECT count(*) FROM payments" + filter.where(),
+                "SELECT " + COLUMNS + " FROM payments" + filter.where() + NEWEST_FIRST,
+                filter.params(), request, PaymentRepository::toPayment);
+    }
+
+    /** A WHERE clause made only of "$1, $2..." placeholders, and the values that go with them. */
+    private record Filter(String where, Tuple params) {
+    }
+
+    private static Filter filter(UUID tenantId, PaymentStatus status, YearMonth rentMonth) {
         List<String> conditions = new ArrayList<>();
         Tuple params = Tuple.tuple();
         if (tenantId != null) {
@@ -69,11 +91,7 @@ public class PaymentRepository {
             params.addValue(rentMonth.toString());
             conditions.add("rent_month = $" + params.size());
         }
-        String where = conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions);
-
-        return pool.preparedQuery("SELECT " + COLUMNS + " FROM payments" + where + NEWEST_FIRST)
-                .execute(params)
-                .map(rows -> DbUtils.mapAll(rows, PaymentRepository::toPayment));
+        return new Filter(conditions.isEmpty() ? "" : " WHERE " + String.join(" AND ", conditions), params);
     }
 
     /** Corrects a payment. The tenant is never changed. Returns empty if no payment has this id. */

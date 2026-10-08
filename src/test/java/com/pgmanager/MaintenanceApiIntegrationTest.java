@@ -68,7 +68,7 @@ class MaintenanceApiIntegrationTest extends ApiTestBase {
 
         // Manager sees it and assigns it to themselves
         assertEquals(issueId, getJson("/api/maintenance/" + issueId, managerToken).getString("id"));
-        assertTrue(ids(getArray("/api/maintenance?status=OPEN", managerToken)).contains(issueId));
+        assertTrue(ids(getItems("/api/maintenance?status=OPEN", managerToken)).contains(issueId));
         String managerId = getJson("/api/auth/me", managerToken).getString("id");
         HttpResponse<Buffer> assigned = send(PATCH, "/api/maintenance/" + issueId + "/assign", managerToken,
                 new JsonObject().put("assignedTo", managerId));
@@ -236,7 +236,7 @@ class MaintenanceApiIntegrationTest extends ApiTestBase {
         assertEquals("Element replaced", edited.bodyAsJsonObject().getString("description"));
 
         for (String token : List.of(adminToken, managerToken)) {
-            assertTrue(ids(getArray("/api/maintenance?tenantId=" + tenant.tenantId(), token)).contains(issueId));
+            assertTrue(ids(getItems("/api/maintenance?tenantId=" + tenant.tenantId(), token)).contains(issueId));
         }
         // The tenant sees the issue staff reported for them
         assertEquals(List.of(issueId), ids(getArray("/api/tenants/" + tenant.tenantId() + "/maintenance", tenant.token())));
@@ -251,14 +251,14 @@ class MaintenanceApiIntegrationTest extends ApiTestBase {
         changeStatus(plumbingLow, "IN_PROGRESS", managerToken);
         String base = "/api/maintenance?tenantId=" + tenant.tenantId();
 
-        assertEquals(List.of(electricalHigh, plumbingLow, plumbingHigh), ids(getArray(base, managerToken)));
-        assertEquals(List.of(plumbingLow, plumbingHigh), ids(getArray(base + "&category=plumbing", managerToken)));
-        assertEquals(List.of(electricalHigh, plumbingHigh), ids(getArray(base + "&priority=HIGH", managerToken)));
-        assertEquals(List.of(plumbingHigh), ids(getArray(base + "&status=OPEN&priority=HIGH&category=PLUMBING", managerToken)));
-        assertEquals(List.of(plumbingLow), ids(getArray(base + "&status=IN_PROGRESS", managerToken)));
-        assertEquals(List.of(), ids(getArray(base + "&status=CLOSED", managerToken)));
+        assertEquals(List.of(electricalHigh, plumbingLow, plumbingHigh), ids(getItems(base, managerToken)));
+        assertEquals(List.of(plumbingLow, plumbingHigh), ids(getItems(base + "&category=plumbing", managerToken)));
+        assertEquals(List.of(electricalHigh, plumbingHigh), ids(getItems(base + "&priority=HIGH", managerToken)));
+        assertEquals(List.of(plumbingHigh), ids(getItems(base + "&status=OPEN&priority=HIGH&category=PLUMBING", managerToken)));
+        assertEquals(List.of(plumbingLow), ids(getItems(base + "&status=IN_PROGRESS", managerToken)));
+        assertEquals(List.of(), ids(getItems(base + "&status=CLOSED", managerToken)));
         // Without a tenant filter, issues of other tenants are included too
-        assertTrue(getArray("/api/maintenance?category=PLUMBING", managerToken).size() >= 2);
+        assertTrue(getItems("/api/maintenance?category=PLUMBING", managerToken).size() >= 2);
     }
 
     @Test
@@ -424,6 +424,11 @@ class MaintenanceApiIntegrationTest extends ApiTestBase {
         HttpResponse<Buffer> response = send(GET, path, token, null);
         assertEquals(200, response.statusCode(), () -> "GET " + path + " failed: " + response.bodyAsString());
         return response.bodyAsJsonObject();
+    }
+
+    /** The items of a paged list (GET /api/maintenance). Large page, so every matching issue is on it. */
+    private static JsonArray getItems(String path, String token) throws Exception {
+        return getJson(path + (path.contains("?") ? "&" : "?") + "size=100", token).getJsonArray("items");
     }
 
     private static JsonArray getArray(String path, String token) throws Exception {

@@ -1,5 +1,6 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.Page;
 import com.pgmanager.dto.PaymentRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.NotFoundException;
@@ -54,14 +55,18 @@ public class PaymentService {
                 .map(payment -> payment.orElseThrow(() -> new NotFoundException(PAYMENT_NOT_FOUND)));
     }
 
-    /** All filters are optional query parameters; the ones that are given are combined with AND. */
-    public Future<List<Payment>> list(String tenantId, String status, String rentMonth) {
+    /**
+     * All filters are optional query parameters; the ones that are given are combined with AND.
+     * Paged with ?page=0&size=20, newest rent month first.
+     */
+    public Future<Page<Payment>> list(String tenantId, String status, String rentMonth, String page, String size) {
         // An invalid filter value throws inside compose(), which turns it into a failed Future (-> 400)
         return Future.succeededFuture()
-                .compose(v -> paymentRepository.find(
+                .compose(v -> paymentRepository.findPage(
                         isBlank(tenantId) ? null : Validation.requireUuid(tenantId, "tenantId"),
                         isBlank(status) ? null : parseStatus(status),
-                        isBlank(rentMonth) ? null : parseRentMonth(rentMonth)));
+                        isBlank(rentMonth) ? null : parseRentMonth(rentMonth),
+                        Validation.pageRequest(page, size)));
     }
 
     /** Corrects a payment's details. The tenant can't be changed, so a payment never moves to someone else's history. */

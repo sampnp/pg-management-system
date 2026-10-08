@@ -1,5 +1,7 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.Page;
+import com.pgmanager.dto.PageRequest;
 import com.pgmanager.dto.PaymentRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
@@ -200,25 +202,28 @@ class PaymentServiceTest {
     }
 
     @Test
-    void listPassesParsedFiltersToRepository() throws Exception {
-        List<Payment> payments = List.of(payment(PaymentStatus.PENDING));
-        when(paymentRepository.find(UUID.fromString(TENANT_ID), PaymentStatus.PENDING, OCTOBER)).thenReturn(Future.succeededFuture(payments));
+    void listPassesParsedFiltersAndPageToRepository() throws Exception {
+        Page<Payment> page = Page.of(List.of(payment(PaymentStatus.PENDING)), new PageRequest(2, 5), 11);
+        when(paymentRepository.findPage(UUID.fromString(TENANT_ID), PaymentStatus.PENDING, OCTOBER, new PageRequest(2, 5)))
+                .thenReturn(Future.succeededFuture(page));
 
-        assertEquals(payments, await(paymentService.list(TENANT_ID, "pending", "2026-10")));
+        assertEquals(page, await(paymentService.list(TENANT_ID, "pending", "2026-10", "2", "5")));
     }
 
     @Test
-    void listWithoutFiltersReturnsEverything() throws Exception {
-        when(paymentRepository.find(null, null, null)).thenReturn(Future.succeededFuture(List.of()));
+    void listWithoutFiltersReturnsTheFirstPageOfEverything() throws Exception {
+        when(paymentRepository.findPage(null, null, null, PageRequest.FIRST))
+                .thenReturn(Future.succeededFuture(Page.of(List.of(), PageRequest.FIRST, 0)));
 
-        assertTrue(await(paymentService.list(null, "", null)).isEmpty());
+        assertTrue(await(paymentService.list(null, "", null, null, null)).items().isEmpty());
     }
 
     @Test
     void listWithInvalidFilterFailsWith400() throws Exception {
-        assertEquals("status must be PAID or PENDING", awaitFailure(paymentService.list(null, "LATE", null)).getMessage());
-        assertEquals("rentMonth must be in YYYY-MM format", awaitFailure(paymentService.list(null, null, "Oct-2026")).getMessage());
-        assertEquals("tenantId must be a valid UUID", awaitFailure(paymentService.list("123", null, null)).getMessage());
+        assertEquals("status must be PAID or PENDING", awaitFailure(paymentService.list(null, "LATE", null, null, null)).getMessage());
+        assertEquals("rentMonth must be in YYYY-MM format", awaitFailure(paymentService.list(null, null, "Oct-2026", null, null)).getMessage());
+        assertEquals("tenantId must be a valid UUID", awaitFailure(paymentService.list("123", null, null, null, null)).getMessage());
+        assertEquals("size must be a number between 1 and 100", awaitFailure(paymentService.list(null, null, null, null, "500")).getMessage());
         verifyNoInteractions(paymentRepository);
     }
 

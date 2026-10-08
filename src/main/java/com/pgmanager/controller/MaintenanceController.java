@@ -26,13 +26,15 @@ public class MaintenanceController {
                 .onFailure(ctx::fail);
     }
 
-    /** GET /api/maintenance?tenantId=...&status=OPEN&priority=HIGH&category=PLUMBING (all filters optional) */
+    /** GET /api/maintenance?tenantId=...&status=OPEN&priority=HIGH&category=PLUMBING&page=0&size=20 (all optional) */
     public void list(RoutingContext ctx) {
         maintenanceService.list(
                         ctx.queryParams().get("tenantId"),
                         ctx.queryParams().get("status"),
                         ctx.queryParams().get("priority"),
-                        ctx.queryParams().get("category"))
+                        ctx.queryParams().get("category"),
+                        ctx.queryParams().get("page"),
+                        ctx.queryParams().get("size"))
                 .onSuccess(ctx::json)
                 .onFailure(ctx::fail);
     }

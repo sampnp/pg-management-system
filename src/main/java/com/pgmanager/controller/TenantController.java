@@ -23,9 +23,9 @@ public class TenantController {
                 .onFailure(ctx::fail);
     }
 
-    /** GET /api/tenants */
+    /** GET /api/tenants?page=0&size=20 */
     public void list(RoutingContext ctx) {
-        tenantService.findAll()
+        tenantService.list(ctx.queryParams().get("page"), ctx.queryParams().get("size"))
                 .onSuccess(ctx::json)
                 .onFailure(ctx::fail);
     }

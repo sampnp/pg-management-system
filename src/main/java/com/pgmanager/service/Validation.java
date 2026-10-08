@@ -1,5 +1,6 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.PageRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.model.Role;
 
@@ -56,6 +57,32 @@ final class Validation {
         } catch (DateTimeParseException e) {
             throw new BadRequestException(field + " must be a valid date in YYYY-MM-DD format");
         }
+    }
+
+    /** ?page=0&size=20 from the query string; both optional. */
+    static PageRequest pageRequest(String page, String size) {
+        int pageNumber = isBlank(page) ? 0 : wholeNumber(page, "page must be a number of 0 or more");
+        if (pageNumber < 0) {
+            throw new BadRequestException("page must be a number of 0 or more");
+        }
+        String sizeMessage = "size must be a number between 1 and " + PageRequest.MAX_SIZE;
+        int pageSize = isBlank(size) ? PageRequest.DEFAULT_SIZE : wholeNumber(size, sizeMessage);
+        if (pageSize < 1 || pageSize > PageRequest.MAX_SIZE) {
+            throw new BadRequestException(sizeMessage);
+        }
+        return new PageRequest(pageNumber, pageSize);
+    }
+
+    private static int wholeNumber(String value, String message) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            throw new BadRequestException(message);
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     /** ADMIN or MANAGER. TENANT accounts are only created for a tenant (POST /api/tenants/:id/account). */

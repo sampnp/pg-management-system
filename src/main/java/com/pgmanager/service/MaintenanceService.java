@@ -3,6 +3,7 @@ package com.pgmanager.service;
 import com.pgmanager.dto.AssignRequest;
 import com.pgmanager.dto.MaintenanceRequest;
 import com.pgmanager.dto.MaintenanceStatusRequest;
+import com.pgmanager.dto.Page;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.ForbiddenException;
@@ -80,15 +81,20 @@ public class MaintenanceService {
                 });
     }
 
-    /** Staff only (checked on the route). All filters are optional and combined with AND. Newest first. */
-    public Future<List<MaintenanceIssue>> list(String tenantId, String status, String priority, String category) {
+    /**
+     * Staff only (checked on the route). All filters are optional and combined with AND.
+     * Paged with ?page=0&size=20, newest first.
+     */
+    public Future<Page<MaintenanceIssue>> list(String tenantId, String status, String priority, String category,
+                                               String page, String size) {
         // An invalid filter throws inside compose(), which turns it into a failed Future (-> 400)
         return Future.succeededFuture()
-                .compose(v -> maintenanceRepository.find(
+                .compose(v -> maintenanceRepository.findPage(
                         isBlank(tenantId) ? null : Validation.requireUuid(tenantId, "tenantId"),
                         isBlank(status) ? null : parseStatus(status),
                         isBlank(priority) ? null : parsePriority(priority),
-                        isBlank(category) ? null : parseCategory(category)));
+                        isBlank(category) ? null : parseCategory(category),
+                        Validation.pageRequest(page, size)));
     }
 
     /**

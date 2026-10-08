@@ -23,9 +23,9 @@ public class PropertyController {
                 .onFailure(ctx::fail);
     }
 
-    /** GET /api/properties */
+    /** GET /api/properties?page=0&size=20 */
     public void list(RoutingContext ctx) {
-        propertyService.findAll()
+        propertyService.list(ctx.queryParams().get("page"), ctx.queryParams().get("size"))
                 .onSuccess(ctx::json)
                 .onFailure(ctx::fail);
     }

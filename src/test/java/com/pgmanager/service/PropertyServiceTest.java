@@ -1,5 +1,7 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.Page;
+import com.pgmanager.dto.PageRequest;
 import com.pgmanager.dto.PropertyRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.NotFoundException;
@@ -77,13 +79,22 @@ class PropertyServiceTest {
     }
 
     @Test
-    void findAllReturnsRepositoryResult() throws Exception {
-        List<Property> properties = List.of(property("A"), property("B"));
-        when(propertyRepository.findAll()).thenReturn(Future.succeededFuture(properties));
+    void listReturnsTheRequestedPage() throws Exception {
+        Page<Property> page = Page.of(List.of(property("A"), property("B")), new PageRequest(0, 2), 5);
+        when(propertyRepository.findPage(new PageRequest(0, 2))).thenReturn(Future.succeededFuture(page));
 
-        assertEquals(properties, await(propertyService.findAll()));
+        assertEquals(page, await(propertyService.list(null, "2")));
         // Reads never touch the dashboard cache
         verify(dashboardCache, never()).invalidate();
+    }
+
+    @Test
+    void listWithInvalidPageFailsWith400() throws Exception {
+        Throwable error = awaitFailure(propertyService.list("first", null));
+
+        assertInstanceOf(BadRequestException.class, error);
+        assertEquals("page must be a number of 0 or more", error.getMessage());
+        verifyNoInteractions(propertyRepository);
     }
 
     @Test

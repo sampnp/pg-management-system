@@ -57,7 +57,7 @@ class PaymentApiIntegrationTest extends ApiTestBase {
 
         // Get, list, tenant history
         assertEquals(paymentId, getJson("/api/payments/" + paymentId).getString("id"));
-        assertTrue(ids(getArray("/api/payments")).contains(paymentId));
+        assertTrue(ids(getItems("/api/payments")).contains(paymentId));
         assertEquals(List.of(paymentId), ids(getArray("/api/tenants/" + tenantId + "/payments")));
 
         // Update (correct the amount and method), then read it back
@@ -100,11 +100,11 @@ class PaymentApiIntegrationTest extends ApiTestBase {
         String alicePendingOct = createPayment(alice, "2026-10", "PENDING");
         String bobPaidOct = createPayment(bob, "2026-10", "PAID");
 
-        assertEquals(List.of(alicePendingOct, alicePaidSep), ids(getArray("/api/payments?tenantId=" + alice)));
-        assertEquals(List.of(bobPaidOct), ids(getArray("/api/payments?tenantId=" + bob + "&rentMonth=2026-10")));
-        assertEquals(List.of(alicePendingOct), ids(getArray("/api/payments?tenantId=" + alice + "&status=PENDING")));
+        assertEquals(List.of(alicePendingOct, alicePaidSep), ids(getItems("/api/payments?tenantId=" + alice)));
+        assertEquals(List.of(bobPaidOct), ids(getItems("/api/payments?tenantId=" + bob + "&rentMonth=2026-10")));
+        assertEquals(List.of(alicePendingOct), ids(getItems("/api/payments?tenantId=" + alice + "&status=PENDING")));
 
-        List<String> paidInOctober = ids(getArray("/api/payments?status=PAID&rentMonth=2026-10"));
+        List<String> paidInOctober = ids(getItems("/api/payments?status=PAID&rentMonth=2026-10"));
         assertTrue(paidInOctober.contains(bobPaidOct));
         assertFalse(paidInOctober.contains(alicePendingOct));
         assertFalse(paidInOctober.contains(alicePaidSep));
@@ -152,7 +152,7 @@ class PaymentApiIntegrationTest extends ApiTestBase {
         // Paying the same month in two parts is normal
         createPayment(tenantId, "2026-10", "PAID");
         createPayment(tenantId, "2026-10", "PAID");
-        assertEquals(3, getArray("/api/payments?tenantId=" + tenantId + "&rentMonth=2026-10").size());
+        assertEquals(3, getItems("/api/payments?tenantId=" + tenantId + "&rentMonth=2026-10").size());
     }
 
     // ---------- payment history survives checkout ----------
@@ -308,6 +308,11 @@ class PaymentApiIntegrationTest extends ApiTestBase {
         HttpResponse<Buffer> response = send(GET, path, token, null);
         assertEquals(200, response.statusCode(), () -> "GET " + path + " failed: " + response.bodyAsString());
         return response.bodyAsJsonObject();
+    }
+
+    /** The items of a paged list (GET /api/payments). Large page, so every matching payment is on it. */
+    private static JsonArray getItems(String path) throws Exception {
+        return getJson(path + (path.contains("?") ? "&" : "?") + "size=100").getJsonArray("items");
     }
 
     private static JsonArray getArray(String path) throws Exception {

@@ -49,7 +49,8 @@ class PropertyRoomBedApiIntegrationTest extends ApiTestBase {
         assertEquals("AVAILABLE", bedResponse.bodyAsJsonObject().getString("status"));
         String bedId = bedResponse.bodyAsJsonObject().getString("id");
 
-        JsonArray properties = send(GET, "/api/properties", adminToken, null).bodyAsJsonArray();
+        // Newest first, so the property just created is on the first page
+        JsonArray properties = send(GET, "/api/properties", adminToken, null).bodyAsJsonObject().getJsonArray("items");
         assertTrue(properties.stream().anyMatch(p -> propertyId.equals(((JsonObject) p).getString("id"))));
 
         JsonArray rooms = send(GET, "/api/properties/" + propertyId + "/rooms", adminToken, null).bodyAsJsonArray();

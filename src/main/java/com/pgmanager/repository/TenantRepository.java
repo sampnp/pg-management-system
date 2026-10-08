@@ -3,6 +3,8 @@ package com.pgmanager.repository;
 import com.pgmanager.exception.ConflictException;
 import com.pgmanager.model.Tenant;
 import com.pgmanager.model.TenantStatus;
+import com.pgmanager.dto.Page;
+import com.pgmanager.dto.PageRequest;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
@@ -11,7 +13,6 @@ import io.vertx.sqlclient.Tuple;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -42,10 +43,11 @@ public class TenantRepository {
                 .map(rows -> toTenant(rows.iterator().next()));
     }
 
-    public Future<List<Tenant>> findAll() {
-        return pool.query("SELECT " + COLUMNS + " FROM tenants ORDER BY created_at, id")
-                .execute()
-                .map(rows -> DbUtils.mapAll(rows, TenantRepository::toTenant));
+    /** Newest first. */
+    public Future<Page<Tenant>> findPage(PageRequest request) {
+        return DbUtils.page(pool, "SELECT count(*) FROM tenants",
+                "SELECT " + COLUMNS + " FROM tenants ORDER BY created_at DESC, id DESC",
+                Tuple.tuple(), request, TenantRepository::toTenant);
     }
 
     public Future<Optional<Tenant>> findById(UUID id) {

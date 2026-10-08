@@ -1,8 +1,13 @@
 package com.pgmanager.repository;
 
+import com.pgmanager.dto.Page;
+import com.pgmanager.dto.PageRequest;
+import io.vertx.core.Future;
 import io.vertx.pgclient.PgException;
+import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
+import io.vertx.sqlclient.Tuple;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,6 +35,31 @@ final class DbUtils {
             result.add(mapper.apply(row));
         }
         return result;
+    }
+
+    /**
+     * One page of a list: a COUNT(*) for the total, then the rows of the page (LIMIT/OFFSET).
+     * countSql and selectSql must use the same WHERE clause and parameters; selectSql must end with an
+     * ORDER BY that has a unique last column (e.g. id), so the order - and therefore each page - is stable.
+     * Pages past the end are empty, without running the second query.
+     */
+    static <T> Future<Page<T>> page(Pool pool, String countSql, String selectSql, Tuple params,
+                                    PageRequest request, Function<Row, T> mapper) {
+        return pool.preparedQuery(countSql).execute(params)
+                .compose(countRows -> {
+                    long total = countRows.iterator().next().getLong(0);
+                    if (request.offset() >= total) {
+                        return Future.succeededFuture(Page.of(List.<T>of(), request, total));
+                    }
+                    Tuple pageParams = Tuple.tuple();
+                    for (int i = 0; i < params.size(); i++) {
+                        pageParams.addValue(params.getValue(i));
+                    }
+                    pageParams.addValue(request.size()).addValue(request.offset());
+                    String limit = " LIMIT $" + (params.size() + 1) + " OFFSET $" + (params.size() + 2);
+                    return pool.preparedQuery(selectSql + limit).execute(pageParams)
+                            .map(rows -> Page.of(mapAll(rows, mapper), request, total));
+                });
     }
 
     /** A UNIQUE constraint was violated, e.g. a duplicate email or room number. */

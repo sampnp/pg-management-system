@@ -3,6 +3,8 @@ package com.pgmanager.service;
 import com.pgmanager.dto.AssignRequest;
 import com.pgmanager.dto.MaintenanceRequest;
 import com.pgmanager.dto.MaintenanceStatusRequest;
+import com.pgmanager.dto.Page;
+import com.pgmanager.dto.PageRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.ForbiddenException;
@@ -229,20 +231,23 @@ class MaintenanceServiceTest {
 
     @Test
     void listParsesAndCombinesAllFilters() throws Exception {
-        when(maintenanceRepository.find(any(), any(), any(), any())).thenReturn(Future.succeededFuture(List.of()));
+        when(maintenanceRepository.findPage(any(), any(), any(), any(), any()))
+                .thenReturn(Future.succeededFuture(Page.of(List.of(), new PageRequest(1, 10), 0)));
 
-        await(maintenanceService.list(tenantId.toString(), "open", "high", "plumbing"));
+        await(maintenanceService.list(tenantId.toString(), "open", "high", "plumbing", "1", "10"));
 
-        verify(maintenanceRepository).find(tenantId, MaintenanceStatus.OPEN, MaintenancePriority.HIGH, MaintenanceCategory.PLUMBING);
+        verify(maintenanceRepository).findPage(tenantId, MaintenanceStatus.OPEN, MaintenancePriority.HIGH,
+                MaintenanceCategory.PLUMBING, new PageRequest(1, 10));
     }
 
     @Test
     void listWithoutFiltersReturnsEverything() throws Exception {
-        when(maintenanceRepository.find(null, null, null, null)).thenReturn(Future.succeededFuture(List.of()));
+        when(maintenanceRepository.findPage(null, null, null, null, PageRequest.FIRST))
+                .thenReturn(Future.succeededFuture(Page.of(List.of(), PageRequest.FIRST, 0)));
 
-        await(maintenanceService.list(null, " ", null, ""));
+        await(maintenanceService.list(null, " ", null, "", null, null));
 
-        verify(maintenanceRepository).find(null, null, null, null);
+        verify(maintenanceRepository).findPage(null, null, null, null, PageRequest.FIRST);
     }
 
     static Stream<Arguments> invalidFilters() {
@@ -250,13 +255,16 @@ class MaintenanceServiceTest {
                 Arguments.of("bad", null, null, null, "tenantId must be a valid UUID"),
                 Arguments.of(null, "DONE", null, null, "status must be OPEN, IN_PROGRESS, RESOLVED or CLOSED"),
                 Arguments.of(null, null, "CRITICAL", null, "priority must be LOW, MEDIUM, HIGH or URGENT"),
-                Arguments.of(null, null, null, "GARDEN", "category must be PLUMBING, ELECTRICAL, CLEANING, FURNITURE, APPLIANCE, INTERNET or OTHER"));
+                Arguments.of(null, null, null, "GARDEN", "category must be PLUMBING, ELECTRICAL, CLEANING, FURNITURE, APPLIANCE, INTERNET or OTHER"),
+                Arguments.of(null, null, null, null, "page must be a number of 0 or more"));
     }
 
     @ParameterizedTest
     @MethodSource("invalidFilters")
     void invalidFilterFailsWith400(String tenant, String status, String priority, String category, String expectedMessage) throws Exception {
-        Throwable error = awaitFailure(maintenanceService.list(tenant, status, priority, category));
+        // The last case has valid filters but page=-1
+        String page = tenant == null && status == null && priority == null && category == null ? "-1" : null;
+        Throwable error = awaitFailure(maintenanceService.list(tenant, status, priority, category, page, null));
 
         assertInstanceOf(BadRequestException.class, error);
         assertEquals(expectedMessage, error.getMessage());

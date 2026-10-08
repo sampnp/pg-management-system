@@ -1,5 +1,7 @@
 package com.pgmanager.repository;
 
+import com.pgmanager.dto.Page;
+import com.pgmanager.dto.PageRequest;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.MaintenanceCategory;
 import com.pgmanager.model.MaintenanceIssue;
@@ -77,6 +79,26 @@ public class MaintenanceRepository {
      */
     public Future<List<MaintenanceIssue>> find(UUID tenantId, MaintenanceStatus status,
                                                MaintenancePriority priority, MaintenanceCategory category) {
+        Filter filter = filter(tenantId, status, priority, category);
+        return pool.preparedQuery(FROM_TABLE + filter.where() + NEWEST_FIRST)
+                .execute(filter.params())
+                .map(rows -> DbUtils.mapAll(rows, MaintenanceRepository::toIssue));
+    }
+
+    /** Same filters as find(), one page at a time. The count needs no joins: every filter is on the issue itself. */
+    public Future<Page<MaintenanceIssue>> findPage(UUID tenantId, MaintenanceStatus status, MaintenancePriority priority,
+                                                   MaintenanceCategory category, PageRequest request) {
+        Filter filter = filter(tenantId, status, priority, category);
+        return DbUtils.page(pool, "SELECT count(*) FROM maintenance_issues m " + filter.where(),
+                FROM_TABLE + filter.where() + NEWEST_FIRST, filter.params(), request, MaintenanceRepository::toIssue);
+    }
+
+    /** A WHERE clause made only of "$1, $2..." placeholders, and the values that go with them. */
+    private record Filter(String where, Tuple params) {
+    }
+
+    private static Filter filter(UUID tenantId, MaintenanceStatus status, MaintenancePriority priority,
+                                 MaintenanceCategory category) {
         List<String> conditions = new ArrayList<>();
         Tuple params = Tuple.tuple();
         if (tenantId != null) {
@@ -95,11 +117,7 @@ public class MaintenanceRepository {
             params.addValue(category.name());
             conditions.add("m.category = $" + params.size());
         }
-        String where = conditions.isEmpty() ? "" : "WHERE " + String.join(" AND ", conditions);
-
-        return pool.preparedQuery(FROM_TABLE + where + NEWEST_FIRST)
-                .execute(params)
-                .map(rows -> DbUtils.mapAll(rows, MaintenanceRepository::toIssue));
+        return new Filter(conditions.isEmpty() ? "" : "WHERE " + String.join(" AND ", conditions), params);
     }
 
     /** Edits the reported details. Empty if the issue no longer has expectedStatus. */
