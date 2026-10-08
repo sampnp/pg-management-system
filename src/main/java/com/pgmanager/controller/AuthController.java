@@ -1,0 +1,41 @@
+package com.pgmanager.controller;
+
+import com.pgmanager.dto.LoginRequest;
+import com.pgmanager.dto.LoginResponse;
+import com.pgmanager.dto.RegisterRequest;
+import com.pgmanager.dto.UserResponse;
+import com.pgmanager.service.AuthService;
+import io.vertx.ext.web.RoutingContext;
+
+/**
+ * HTTP layer only: read the request, call the service, write the response.
+ * Failures are passed to ctx.fail(), which hands them to GlobalErrorHandler.
+ */
+public class AuthController {
+
+    private final AuthService authService;
+
+    public AuthController(AuthService authService) {
+        this.authService = authService;
+    }
+
+    /** POST /api/auth/register */
+    public void register(RoutingContext ctx) {
+        // asPojo throws DecodeException on malformed JSON; Vert.x routes that to the failure handler (400)
+        RegisterRequest request = ctx.body().asPojo(RegisterRequest.class);
+        authService.register(request)
+                .onSuccess(user -> {
+                    ctx.response().setStatusCode(201);
+                    ctx.json(UserResponse.from(user));
+                })
+                .onFailure(ctx::fail);
+    }
+
+    /** POST /api/auth/login */
+    public void login(RoutingContext ctx) {
+        LoginRequest request = ctx.body().asPojo(LoginRequest.class);
+        authService.login(request)
+                .onSuccess(token -> ctx.json(new LoginResponse(token)))
+                .onFailure(ctx::fail);
+    }
+}

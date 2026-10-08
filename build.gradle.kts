@@ -24,6 +24,9 @@ dependencies {
     implementation("io.vertx:vertx-core")
     implementation("io.vertx:vertx-web")
     implementation("io.vertx:vertx-pg-client")
+    implementation("io.vertx:vertx-auth-jwt")
+
+    implementation("at.favre.lib:bcrypt:0.10.2")
 
     // Lets Vert.x convert Java records/objects to and from JSON
     implementation("com.fasterxml.jackson.core:jackson-databind")
@@ -44,6 +47,7 @@ application {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
+    options.compilerArgs.add("-Xlint:deprecation")
 }
 
 tasks.named<JavaExec>("run") {
