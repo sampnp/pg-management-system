@@ -19,6 +19,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Redis is only a cache, so it keeps nothing on disk: after a restart it starts empty instead of
+    # loading an old (possibly out-of-date) dashboard that was saved when it stopped.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - "${REDIS_PORT:-6379}:6379"
     healthcheck:
