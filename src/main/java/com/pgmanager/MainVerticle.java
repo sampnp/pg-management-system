@@ -6,6 +6,7 @@ import com.pgmanager.config.JsonConfig;
 import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.BedController;
 import com.pgmanager.controller.HealthController;
+import com.pgmanager.controller.OccupancyController;
 import com.pgmanager.controller.PropertyController;
 import com.pgmanager.controller.RoomController;
 import com.pgmanager.controller.TenantController;
@@ -14,6 +15,7 @@ import com.pgmanager.model.Role;
 import com.pgmanager.repository.BedRepository;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
+import com.pgmanager.repository.TenantBedHistoryRepository;
 import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.JwtAuthHandler;
@@ -22,6 +24,7 @@ import com.pgmanager.security.PasswordHasher;
 import com.pgmanager.security.RoleHandler;
 import com.pgmanager.service.AuthService;
 import com.pgmanager.service.BedService;
+import com.pgmanager.service.OccupancyService;
 import com.pgmanager.service.PropertyService;
 import com.pgmanager.service.RoomService;
 import com.pgmanager.service.TenantService;
@@ -83,10 +86,12 @@ public class MainVerticle extends VerticleBase {
         RoomRepository roomRepository = new RoomRepository(pool);
         BedRepository bedRepository = new BedRepository(pool);
         TenantRepository tenantRepository = new TenantRepository(pool);
+        TenantBedHistoryRepository historyRepository = new TenantBedHistoryRepository();
         PropertyService propertyService = new PropertyService(propertyRepository);
         RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
         BedService bedService = new BedService(roomRepository, bedRepository);
         TenantService tenantService = new TenantService(tenantRepository);
+        OccupancyService occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository);
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
@@ -94,6 +99,7 @@ public class MainVerticle extends VerticleBase {
         RoomController roomController = new RoomController(roomService);
         BedController bedController = new BedController(bedService);
         TenantController tenantController = new TenantController(tenantService);
+        OccupancyController occupancyController = new OccupancyController(occupancyService);
         JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
         Handler<RoutingContext> staffOnly = RoleHandler.requireRole(Role.ADMIN, Role.MANAGER);
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
@@ -145,6 +151,9 @@ public class MainVerticle extends VerticleBase {
         router.get("/api/tenants/:id").handler(tenantController::get);
         router.put("/api/tenants/:id").handler(tenantController::update);
         router.delete("/api/tenants/:id").handler(tenantController::delete);
+
+        router.post("/api/tenants/:tenantId/check-in").handler(occupancyController::checkIn);
+        router.post("/api/tenants/:tenantId/check-out").handler(occupancyController::checkOut);
 
         // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
         router.route().failureHandler(errorHandler);

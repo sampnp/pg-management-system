@@ -6,6 +6,7 @@ import com.pgmanager.model.TenantStatus;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
+import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.Tuple;
 
 import java.math.BigDecimal;
@@ -14,7 +15,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-/** SQL for the tenants table. */
+/**
+ * SQL for the tenants table.
+ * Methods with a SqlClient parameter are used inside check-in/check-out transactions:
+ * pass the transaction's connection so they run as part of that transaction.
+ */
 public class TenantRepository {
 
     private static final String COLUMNS =
@@ -49,6 +54,16 @@ public class TenantRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(TenantRepository::toTenant));
     }
 
+    /**
+     * Same as findById, but locks the row until the transaction ends (FOR UPDATE).
+     * A second check-in/check-out for the same tenant waits here instead of running at the same time.
+     */
+    public Future<Optional<Tenant>> findByIdForUpdate(SqlClient client, UUID id) {
+        return client.preparedQuery("SELECT " + COLUMNS + " FROM tenants WHERE id = $1 FOR UPDATE")
+                .execute(Tuple.of(id))
+                .map(rows -> DbUtils.firstRow(rows).map(TenantRepository::toTenant));
+    }
+
     /** Updates personal details only - status is changed by check-in/check-out. Empty if no tenant has this id. */
     public Future<Optional<Tenant>> update(UUID id, String name, String phone, String email, LocalDate joiningDate,
                                            BigDecimal monthlyRent, BigDecimal securityDeposit) {
@@ -59,6 +74,12 @@ public class TenantRepository {
                         RETURNING\s""" + COLUMNS)
                 .execute(Tuple.of(id, name, phone, email, joiningDate, monthlyRent, securityDeposit))
                 .map(rows -> DbUtils.firstRow(rows).map(TenantRepository::toTenant));
+    }
+
+    public Future<Void> updateStatus(SqlClient client, UUID id, TenantStatus status) {
+        return client.preparedQuery("UPDATE tenants SET status = $2 WHERE id = $1")
+                .execute(Tuple.of(id, status.name()))
+                .mapEmpty();
     }
 
     /** Returns false if no tenant has this id. Fails with 409 if occupancy history references the tenant. */

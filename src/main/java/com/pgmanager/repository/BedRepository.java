@@ -7,6 +7,7 @@ import com.pgmanager.model.BedStatus;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
+import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.Tuple;
 
 import java.util.List;
@@ -60,7 +61,22 @@ public class BedRepository {
 
     /** Returns the updated bed, or empty if no bed has this id. */
     public Future<Optional<Bed>> updateStatus(UUID id, BedStatus status) {
-        return pool.preparedQuery("UPDATE beds SET status = $2 WHERE id = $1 RETURNING " + COLUMNS)
+        return updateStatus(pool, id, status);
+    }
+
+    /**
+     * Same as findById, but locks the bed row until the transaction ends (FOR UPDATE).
+     * If two check-ins race for the same bed, the second one waits here and then sees OCCUPIED.
+     */
+    public Future<Optional<Bed>> findByIdForUpdate(SqlClient client, UUID id) {
+        return client.preparedQuery("SELECT " + COLUMNS + " FROM beds WHERE id = $1 FOR UPDATE")
+                .execute(Tuple.of(id))
+                .map(rows -> DbUtils.firstRow(rows).map(BedRepository::toBed));
+    }
+
+    /** Runs on the given transaction connection: status only changes together with occupancy. Empty if no bed has this id. */
+    public Future<Optional<Bed>> updateStatus(SqlClient client, UUID id, BedStatus status) {
+        return client.preparedQuery("UPDATE beds SET status = $2 WHERE id = $1 RETURNING " + COLUMNS)
                 .execute(Tuple.of(id, status.name()))
                 .map(rows -> DbUtils.firstRow(rows).map(BedRepository::toBed));
     }
