@@ -45,7 +45,8 @@ public record AppConfig(int httpPort, DatabaseConfig database, JwtConfig jwt, Re
         SecurityConfig security = new SecurityConfig(
                 getBoolean(env, "ALLOW_PUBLIC_REGISTRATION", false),
                 env.get("BOOTSTRAP_ADMIN_EMAIL"),
-                env.get("BOOTSTRAP_ADMIN_PASSWORD"));
+                env.get("BOOTSTRAP_ADMIN_PASSWORD"),
+                env.get("CORS_ALLOWED_ORIGIN"));
 
         return new AppConfig(getInt(env, "HTTP_PORT", 8080), database, jwt, redis, security);
     }

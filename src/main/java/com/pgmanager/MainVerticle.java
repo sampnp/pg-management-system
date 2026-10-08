@@ -32,6 +32,7 @@ import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.security.JwtService;
 import com.pgmanager.security.PasswordHasher;
 import com.pgmanager.security.RoleHandler;
+import com.pgmanager.security.SecurityHeadersHandler;
 import com.pgmanager.service.AuthService;
 import com.pgmanager.service.BedService;
 import com.pgmanager.service.DashboardService;
@@ -45,10 +46,12 @@ import com.pgmanager.service.UserService;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.VerticleBase;
+import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
+import io.vertx.ext.web.handler.CorsHandler;
 import io.vertx.redis.client.Redis;
 import io.vertx.redis.client.RedisAPI;
 import io.vertx.sqlclient.Pool;
@@ -56,6 +59,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Wires the application together (manual constructor injection) and starts the HTTP server.
@@ -150,7 +154,16 @@ public class MainVerticle extends VerticleBase {
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
 
         Router router = Router.router(vertx);
-        // BodyHandler must come first: it reads the request body before any async handler (like JWT checks) runs
+        // Security headers on every response (also errors and 404s)
+        router.route().handler(new SecurityHeadersHandler());
+        // CORS only when one browser origin is configured; otherwise browsers can't call the API cross-site
+        if (config.security().corsEnabled()) {
+            router.route().handler(CorsHandler.create()
+                    .addOrigin(config.security().corsAllowedOrigin())
+                    .allowedMethods(Set.of(HttpMethod.GET, HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.DELETE))
+                    .allowedHeaders(Set.of("Authorization", "Content-Type")));
+        }
+        // BodyHandler must come before any async handler (like JWT checks): it reads the request body first
         router.route("/api/*").handler(BodyHandler.create().setBodyLimit(MAX_BODY_BYTES));
 
         router.get("/api/health").handler(healthController::check);

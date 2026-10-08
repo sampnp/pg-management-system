@@ -117,6 +117,29 @@ class AppConfigTest {
     }
 
     @Test
+    void corsIsOffUnlessOneOriginIsConfigured() {
+        assertFalse(AppConfig.from(minimalEnv()).security().corsEnabled());
+
+        Map<String, String> env = minimalEnv();
+        env.put("CORS_ALLOWED_ORIGIN", "https://app.example.com");
+        assertTrue(AppConfig.from(env).security().corsEnabled());
+        assertEquals("https://app.example.com", AppConfig.from(env).security().corsAllowedOrigin());
+
+        env.put("CORS_ALLOWED_ORIGIN", "http://localhost:5173");
+        assertTrue(AppConfig.from(env).security().corsEnabled());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"*", "https://app.example.com/", "https://app.example.com/path", "app.example.com", "https://*.example.com"})
+    void corsWildcardsAndPathsAreRefused(String origin) {
+        Map<String, String> env = minimalEnv();
+        env.put("CORS_ALLOWED_ORIGIN", origin);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class, () -> AppConfig.from(env));
+        assertTrue(error.getMessage().startsWith("CORS_ALLOWED_ORIGIN must be one origin"), error.getMessage());
+    }
+
+    @Test
     void secretsAreNotPrintedByToString() {
         Map<String, String> env = minimalEnv();
         env.put("BOOTSTRAP_ADMIN_EMAIL", "owner@example.com");
