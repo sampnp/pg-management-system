@@ -3,18 +3,24 @@ package com.pgmanager;
 import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.Database;
 import com.pgmanager.controller.AuthController;
+import com.pgmanager.controller.BedController;
 import com.pgmanager.controller.HealthController;
 import com.pgmanager.controller.PropertyController;
+import com.pgmanager.controller.RoomController;
 import com.pgmanager.exception.GlobalErrorHandler;
 import com.pgmanager.model.Role;
+import com.pgmanager.repository.BedRepository;
 import com.pgmanager.repository.PropertyRepository;
+import com.pgmanager.repository.RoomRepository;
 import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.security.JwtService;
 import com.pgmanager.security.PasswordHasher;
 import com.pgmanager.security.RoleHandler;
 import com.pgmanager.service.AuthService;
+import com.pgmanager.service.BedService;
 import com.pgmanager.service.PropertyService;
+import com.pgmanager.service.RoomService;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.VerticleBase;
@@ -25,6 +31,8 @@ import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.sqlclient.Pool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.List;
 
 /**
  * Wires the application together (manual constructor injection) and starts the HTTP server.
@@ -67,11 +75,17 @@ public class MainVerticle extends VerticleBase {
         AuthService authService = new AuthService(vertx, userRepository, passwordHasher, jwtService);
 
         PropertyRepository propertyRepository = new PropertyRepository(pool);
+        RoomRepository roomRepository = new RoomRepository(pool);
+        BedRepository bedRepository = new BedRepository(pool);
         PropertyService propertyService = new PropertyService(propertyRepository);
+        RoomService roomService = new RoomService(propertyRepository, roomRepository);
+        BedService bedService = new BedService(roomRepository, bedRepository);
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
         PropertyController propertyController = new PropertyController(propertyService);
+        RoomController roomController = new RoomController(roomService);
+        BedController bedController = new BedController(bedService);
         JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
         Handler<RoutingContext> staffOnly = RoleHandler.requireRole(Role.ADMIN, Role.MANAGER);
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
@@ -93,15 +107,30 @@ public class MainVerticle extends VerticleBase {
                 .handler(RoleHandler.requireRole(Role.ADMIN))
                 .handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
 
-        // Property management: protect the whole path prefix once, so every endpoint under it
-        // (including ones added later) requires a valid JWT and an ADMIN or MANAGER role
-        router.route("/api/properties*").handler(jwtAuth).handler(staffOnly);
+        // Property/room/bed management: protect each whole path prefix once, so every endpoint
+        // under it (including ones added later) requires a valid JWT and an ADMIN or MANAGER role
+        for (String protectedPath : List.of("/api/properties*", "/api/rooms*", "/api/beds*")) {
+            router.route(protectedPath).handler(jwtAuth).handler(staffOnly);
+        }
 
         router.post("/api/properties").handler(propertyController::create);
         router.get("/api/properties").handler(propertyController::list);
         router.get("/api/properties/:id").handler(propertyController::get);
         router.put("/api/properties/:id").handler(propertyController::update);
         router.delete("/api/properties/:id").handler(propertyController::delete);
+
+        router.post("/api/properties/:propertyId/rooms").handler(roomController::create);
+        router.get("/api/properties/:propertyId/rooms").handler(roomController::listByProperty);
+        router.get("/api/rooms/:id").handler(roomController::get);
+        router.put("/api/rooms/:id").handler(roomController::update);
+        router.delete("/api/rooms/:id").handler(roomController::delete);
+
+        router.post("/api/rooms/:roomId/beds").handler(bedController::create);
+        router.get("/api/rooms/:roomId/beds").handler(bedController::listByRoom);
+        router.get("/api/beds/:id").handler(bedController::get);
+        router.put("/api/beds/:id").handler(bedController::update);
+        router.patch("/api/beds/:id/status").handler(bedController::updateStatus);
+        router.delete("/api/beds/:id").handler(bedController::delete);
 
         // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
         router.route().failureHandler(errorHandler);
