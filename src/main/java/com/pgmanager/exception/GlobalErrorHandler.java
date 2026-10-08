@@ -28,6 +28,12 @@ public class GlobalErrorHandler implements Handler<RoutingContext> {
             // Vert.x itself failed the request with a status code (404 no route, 405, 413 body too large...)
             case HttpException e -> ApiError.of(e.getStatusCode(), defaultMessage(e.getStatusCode()));
             case null -> ApiError.of(statusOrDefault(ctx.statusCode()), defaultMessage(ctx.statusCode()));
+            // A Vert.x handler refused the request with a 4xx status and an exception as the reason
+            // (e.g. CorsHandler: 403 for an origin that is not allowed). The client's fault, not a server error.
+            case Throwable e when ctx.statusCode() >= 400 && ctx.statusCode() < 500 -> {
+                log.debug("Request refused with {}: {}", ctx.statusCode(), e.getMessage());
+                yield ApiError.of(ctx.statusCode(), defaultMessage(ctx.statusCode()));
+            }
             default -> {
                 log.error("Unhandled error on {} {}", ctx.request().method(), ctx.request().path(), ctx.failure());
                 yield ApiError.of(500, "Internal server error");

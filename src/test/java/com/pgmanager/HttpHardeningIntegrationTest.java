@@ -61,7 +61,9 @@ class HttpHardeningIntegrationTest extends ApiTestBase {
             assertEquals(allowed, await(app.client().get("/api/health").putHeader("Origin", allowed).send())
                     .getHeader("Access-Control-Allow-Origin"));
 
+            // Another origin is refused with a normal 403 error (not a 500) and no CORS header
             HttpResponse<Buffer> other = await(app.client().get("/api/health").putHeader("Origin", "https://evil.example.com").send());
+            assertError(other, 403, "FORBIDDEN", "Insufficient permissions");
             assertNull(other.getHeader("Access-Control-Allow-Origin"));
         } finally {
             stopApp(app);
