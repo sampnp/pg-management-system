@@ -1,6 +1,7 @@
 package com.pgmanager;
 
 import com.pgmanager.config.AppConfig;
+import com.pgmanager.config.Database;
 import com.pgmanager.config.DatabaseConfig;
 import com.pgmanager.config.JwtConfig;
 import io.vertx.core.Vertx;
@@ -11,6 +12,8 @@ import io.vertx.ext.web.client.HttpRequest;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
+import io.vertx.sqlclient.Pool;
+import io.vertx.sqlclient.Tuple;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -72,8 +75,9 @@ abstract class ApiTestBase {
         return await(body != null ? request.sendJsonObject(body) : request.send());
     }
 
-    protected static HttpResponse<Buffer> register(String name, String email, String password, String role) throws Exception {
-        JsonObject body = new JsonObject().put("name", name).put("email", email).put("password", password).put("role", role);
+    /** Public registration - always creates a MANAGER. */
+    protected static HttpResponse<Buffer> register(String name, String email, String password) throws Exception {
+        JsonObject body = new JsonObject().put("name", name).put("email", email).put("password", password);
         return send(HttpMethod.POST, "/api/auth/register", null, body);
     }
 
@@ -81,13 +85,28 @@ abstract class ApiTestBase {
         return send(HttpMethod.POST, "/api/auth/login", null, new JsonObject().put("email", email).put("password", password));
     }
 
-    /** Registers a fresh user with the given role and returns their JWT. */
+    /**
+     * Registers a fresh user with the given role and returns their JWT. Registration only creates managers,
+     * so an ADMIN is made the same way an operator makes the first admin: an UPDATE run directly on the database.
+     */
     protected static String registerAndLogin(String role) throws Exception {
         String email = uniqueEmail();
-        register("Test User", email, "password123", role);
+        assertEquals(201, register("Test User", email, "password123").statusCode());
+        if (role.equals("ADMIN")) {
+            setRoleInDatabase(email, "ADMIN");
+        }
         HttpResponse<Buffer> response = login(email, "password123");
         assertEquals(200, response.statusCode());
         return response.bodyAsJsonObject().getString("token");
+    }
+
+    protected static void setRoleInDatabase(String email, String role) throws Exception {
+        Pool db = Database.createPool(vertx, databaseConfig());
+        try {
+            await(db.preparedQuery("UPDATE users SET role = $2 WHERE email = $1").execute(Tuple.of(email, role)));
+        } finally {
+            await(db.close());
+        }
     }
 
     /** Checks the status code and the standard error body from GlobalErrorHandler. */

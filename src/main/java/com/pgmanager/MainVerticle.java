@@ -11,6 +11,7 @@ import com.pgmanager.controller.PaymentController;
 import com.pgmanager.controller.PropertyController;
 import com.pgmanager.controller.RoomController;
 import com.pgmanager.controller.TenantController;
+import com.pgmanager.controller.UserController;
 import com.pgmanager.exception.GlobalErrorHandler;
 import com.pgmanager.model.Role;
 import com.pgmanager.repository.BedRepository;
@@ -31,6 +32,7 @@ import com.pgmanager.service.PaymentService;
 import com.pgmanager.service.PropertyService;
 import com.pgmanager.service.RoomService;
 import com.pgmanager.service.TenantService;
+import com.pgmanager.service.UserService;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.VerticleBase;
@@ -84,6 +86,7 @@ public class MainVerticle extends VerticleBase {
         PasswordHasher passwordHasher = new PasswordHasher(PasswordHasher.DEFAULT_COST);
         JwtService jwtService = new JwtService(vertx, config.jwt());
         AuthService authService = new AuthService(vertx, userRepository, passwordHasher, jwtService);
+        UserService userService = new UserService(userRepository);
 
         PropertyRepository propertyRepository = new PropertyRepository(pool);
         RoomRepository roomRepository = new RoomRepository(pool);
@@ -100,6 +103,7 @@ public class MainVerticle extends VerticleBase {
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
+        UserController userController = new UserController(userService);
         PropertyController propertyController = new PropertyController(propertyService);
         RoomController roomController = new RoomController(roomService);
         BedController bedController = new BedController(bedService);
@@ -122,10 +126,11 @@ public class MainVerticle extends VerticleBase {
 
         // Protected: each handler runs in order and calls ctx.next() to pass the request on
         router.get("/api/auth/me").handler(jwtAuth).handler(authController::me);
-        router.get("/api/admin/test")
-                .handler(jwtAuth)
-                .handler(RoleHandler.requireRole(Role.ADMIN))
-                .handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
+
+        // Admin only: every endpoint under /api/admin requires a valid JWT with the ADMIN role
+        router.route("/api/admin*").handler(jwtAuth).handler(RoleHandler.requireRole(Role.ADMIN));
+        router.get("/api/admin/test").handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
+        router.patch("/api/admin/users/:id/role").handler(userController::changeRole);
 
         // Property/room/bed/tenant/payment management: protect each whole path prefix once, so every endpoint
         // under it (including ones added later) requires a valid JWT and an ADMIN or MANAGER role

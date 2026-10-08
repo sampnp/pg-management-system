@@ -41,6 +41,10 @@ public class AuthService {
         this.dummyHash = passwordHasher.hash(UUID.randomUUID().toString());
     }
 
+    /**
+     * Public registration always creates a MANAGER. The caller cannot choose a role, so nobody can
+     * make themselves ADMIN here - an existing ADMIN has to promote them (see UserService.changeRole).
+     */
     public Future<User> register(RegisterRequest request) {
         String validationError = validateRegistration(request);
         if (validationError != null) {
@@ -48,7 +52,6 @@ public class AuthService {
         }
 
         String email = normalizeEmail(request.email());
-        Role role = Role.valueOf(request.role().trim().toUpperCase(Locale.ROOT));
 
         return userRepository.findByEmail(email)
                 .compose(existing -> {
@@ -59,7 +62,7 @@ public class AuthService {
                     // letting several registrations hash in parallel instead of queueing one after another.
                     return vertx.executeBlocking(() -> passwordHasher.hash(request.password()), false);
                 })
-                .compose(hash -> userRepository.insert(request.name().trim(), email, hash, role));
+                .compose(hash -> userRepository.insert(request.name().trim(), email, hash, Role.MANAGER));
     }
 
     /** Returns a signed JWT if the credentials are valid. */
@@ -109,22 +112,7 @@ public class AuthService {
         if (PasswordHasher.exceedsMaxLength(request.password())) {
             return "password must be at most " + PasswordHasher.MAX_PASSWORD_BYTES + " characters";
         }
-        if (isBlank(request.role())) {
-            return "role is required";
-        }
-        if (!isValidRole(request.role())) {
-            return "role must be ADMIN or MANAGER";
-        }
         return null;
-    }
-
-    private static boolean isValidRole(String role) {
-        try {
-            Role.valueOf(role.trim().toUpperCase(Locale.ROOT));
-            return true;
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
     }
 
     private static String normalizeEmail(String email) {

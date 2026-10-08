@@ -20,7 +20,7 @@ class AuthApiIntegrationTest extends ApiTestBase {
     void registerReturns201AndNeverExposesThePassword() throws Exception {
         String email = uniqueEmail();
 
-        HttpResponse<Buffer> response = register("Sambit", email, "password123", "MANAGER");
+        HttpResponse<Buffer> response = register("Sambit", email, "password123");
 
         assertEquals(201, response.statusCode());
         JsonObject body = response.bodyAsJsonObject();
@@ -36,16 +36,16 @@ class AuthApiIntegrationTest extends ApiTestBase {
     @Test
     void registerWithDuplicateEmailReturns409() throws Exception {
         String email = uniqueEmail();
-        register("Sambit", email, "password123", "MANAGER");
+        register("Sambit", email, "password123");
 
-        HttpResponse<Buffer> response = register("Someone Else", email, "password456", "MANAGER");
+        HttpResponse<Buffer> response = register("Someone Else", email, "password456");
 
         assertError(response, 409, "CONFLICT", "Email already exists");
     }
 
     @Test
     void registerWithInvalidEmailReturns400() throws Exception {
-        assertError(register("Sambit", "not-an-email", "password123", "MANAGER"), 400, "BAD_REQUEST", "email is not valid");
+        assertError(register("Sambit", "not-an-email", "password123"), 400, "BAD_REQUEST", "email is not valid");
     }
 
     @Test
@@ -62,7 +62,7 @@ class AuthApiIntegrationTest extends ApiTestBase {
     @Test
     void loginReturnsTokenThatWorksForMe() throws Exception {
         String email = uniqueEmail();
-        register("Sambit", email, "password123", "MANAGER");
+        register("Sambit", email, "password123");
         String token = login(email, "password123").bodyAsJsonObject().getString("token");
 
         HttpResponse<Buffer> me = send(HttpMethod.GET, "/api/auth/me", token, null);
@@ -76,7 +76,7 @@ class AuthApiIntegrationTest extends ApiTestBase {
     @Test
     void loginWithWrongPasswordReturns401() throws Exception {
         String email = uniqueEmail();
-        register("Sambit", email, "password123", "MANAGER");
+        register("Sambit", email, "password123");
 
         assertError(login(email, "wrong-password"), 401, "UNAUTHORIZED", "Invalid email or password");
     }

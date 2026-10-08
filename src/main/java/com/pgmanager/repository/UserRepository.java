@@ -9,6 +9,7 @@ import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
 
 import java.util.Optional;
+import java.util.UUID;
 
 /** SQL for the users table. All queries are parameterized ($1, $2...) so user input can never change the SQL. */
 public class UserRepository {
@@ -35,6 +36,13 @@ public class UserRepository {
                 .recover(err -> Future.failedFuture(DbUtils.isUniqueViolation(err)
                         ? new ConflictException("Email already exists")
                         : err));
+    }
+
+    /** Empty if no user has this id. */
+    public Future<Optional<User>> updateRole(UUID id, Role role) {
+        return pool.preparedQuery("UPDATE users SET role = $2 WHERE id = $1 RETURNING " + COLUMNS)
+                .execute(Tuple.of(id, role.name()))
+                .map(rows -> DbUtils.firstRow(rows).map(UserRepository::toUser));
     }
 
     private static User toUser(Row row) {

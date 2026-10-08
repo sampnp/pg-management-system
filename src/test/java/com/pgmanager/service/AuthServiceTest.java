@@ -78,7 +78,7 @@ class AuthServiceTest {
                 new User(UUID.randomUUID(), call.getArgument(0), call.getArgument(1), call.getArgument(2),
                         call.getArgument(3), Instant.now())));
 
-        User user = await(authService.register(new RegisterRequest(" Sambit ", " Sambit@Example.com ", "password123", "manager")));
+        User user = await(authService.register(new RegisterRequest(" Sambit ", " Sambit@Example.com ", "password123")));
 
         assertEquals("Sambit", user.name());
         assertEquals("sambit@example.com", user.email());
@@ -91,7 +91,7 @@ class AuthServiceTest {
     void registerWithExistingEmailFailsWithConflict() throws Exception {
         when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(storedUser("password123"))));
 
-        Throwable error = awaitFailure(authService.register(new RegisterRequest("Sambit", "sambit@example.com", "password123", "MANAGER")));
+        Throwable error = awaitFailure(authService.register(new RegisterRequest("Sambit", "sambit@example.com", "password123")));
 
         assertInstanceOf(ConflictException.class, error);
         assertEquals("Email already exists", error.getMessage());
@@ -101,14 +101,12 @@ class AuthServiceTest {
     static Stream<Arguments> invalidRegistrations() {
         return Stream.of(
                 Arguments.of(null, "Request body is required"),
-                Arguments.of(new RegisterRequest(null, "a@example.com", "password123", "MANAGER"), "name is required"),
-                Arguments.of(new RegisterRequest("  ", "a@example.com", "password123", "MANAGER"), "name is required"),
-                Arguments.of(new RegisterRequest("Sambit", null, "password123", "MANAGER"), "email is required"),
-                Arguments.of(new RegisterRequest("Sambit", "not-an-email", "password123", "MANAGER"), "email is not valid"),
-                Arguments.of(new RegisterRequest("Sambit", "a@example.com", null, "MANAGER"), "password is required"),
-                Arguments.of(new RegisterRequest("Sambit", "a@example.com", "short", "MANAGER"), "password must be at least 8 characters"),
-                Arguments.of(new RegisterRequest("Sambit", "a@example.com", "password123", null), "role is required"),
-                Arguments.of(new RegisterRequest("Sambit", "a@example.com", "password123", "OWNER"), "role must be ADMIN or MANAGER"));
+                Arguments.of(new RegisterRequest(null, "a@example.com", "password123"), "name is required"),
+                Arguments.of(new RegisterRequest("  ", "a@example.com", "password123"), "name is required"),
+                Arguments.of(new RegisterRequest("Sambit", null, "password123"), "email is required"),
+                Arguments.of(new RegisterRequest("Sambit", "not-an-email", "password123"), "email is not valid"),
+                Arguments.of(new RegisterRequest("Sambit", "a@example.com", null), "password is required"),
+                Arguments.of(new RegisterRequest("Sambit", "a@example.com", "short"), "password must be at least 8 characters"));
     }
 
     @ParameterizedTest
