@@ -1,0 +1,16 @@
+# Keep secrets, local build output and editor files out of the Docker build context
+.env
+.env.*
+.git
+.gradle
+build
+bin
+out
+.idea
+.vscode
+*.iml
+*.log
+README.md
+docker-compose.yml
+Dockerfile
+.dockerignore

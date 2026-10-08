@@ -1,14 +1,47 @@
-# Local infrastructure. Values come from the .env file in this folder.
-# The application container will be added in Phase 10.
+# The whole stack: the API (app), PostgreSQL and Redis. Values come from the .env file in this folder.
+#   docker compose up --build -d     -> API on http://localhost:8080
+# Inside Compose the app reaches the others by service name (postgres, redis), not localhost.
 services:
+  app:
+    build: .
+    image: pg-manager:latest
+    depends_on:
+      postgres:
+        condition: service_healthy    # migrations need the database, so wait until it accepts connections
+      redis:
+        condition: service_started    # only a cache: the app also works while Redis is down
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      HTTP_PORT: 8080
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USER: ${DATABASE_USER}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DASHBOARD_CACHE_TTL_SECONDS: ${DASHBOARD_CACHE_TTL_SECONDS:-60}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_SECONDS: ${JWT_EXPIRATION_SECONDS:-3600}
+      ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-false}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-}
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    # If startup fails (e.g. the database is restarting), Docker starts the app again
+    restart: unless-stopped
+
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: ${DATABASE_NAME}
       POSTGRES_USER: ${DATABASE_USER}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    # Published on 127.0.0.1 only, for local tools and `./gradlew run`; not reachable from other machines.
+    # 5433 by default (.env) to avoid clashing with a locally installed PostgreSQL.
     ports:
-      - "${DATABASE_PORT:-5432}:5432"
+      - "127.0.0.1:${DATABASE_PORT:-5433}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -16,6 +49,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -23,12 +57,13 @@ services:
     # loading an old (possibly out-of-date) dashboard that was saved when it stopped.
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
 
 volumes:
   postgres-data:
