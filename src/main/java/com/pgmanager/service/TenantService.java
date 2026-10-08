@@ -11,7 +11,6 @@ import io.vertx.core.Future;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -25,8 +24,6 @@ public class TenantService {
     // Optional "+", then 7-15 digits (the international maximum). Spaces and dashes are removed first.
     private static final Pattern PHONE_PATTERN = Pattern.compile("^\\+?[0-9]{7,15}$");
     private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
-    // The columns are NUMERIC(10, 2): at most 99,999,999.99
-    private static final BigDecimal MAX_AMOUNT = new BigDecimal("100000000");
 
     private final TenantRepository tenantRepository;
 
@@ -92,8 +89,8 @@ public class TenantService {
                 validatePhone(request.phone()),
                 validateEmail(request.email()),
                 validateJoiningDate(request.joiningDate()),
-                validateAmount(request.monthlyRent(), "monthlyRent", false),
-                validateAmount(request.securityDeposit(), "securityDeposit", true));
+                Validation.requireAmount(request.monthlyRent(), "monthlyRent", false),
+                Validation.requireAmount(request.securityDeposit(), "securityDeposit", true));
     }
 
     private static String validatePhone(String phone) {
@@ -123,26 +120,6 @@ public class TenantService {
         if (joiningDate == null || joiningDate.isBlank()) {
             throw new BadRequestException("joiningDate is required");
         }
-        try {
-            return LocalDate.parse(joiningDate.trim());
-        } catch (DateTimeParseException e) {
-            throw new BadRequestException("joiningDate must be a valid date in YYYY-MM-DD format");
-        }
-    }
-
-    private static BigDecimal validateAmount(BigDecimal amount, String field, boolean zeroAllowed) {
-        if (amount == null) {
-            throw new BadRequestException(field + " is required");
-        }
-        if (zeroAllowed ? amount.signum() < 0 : amount.signum() <= 0) {
-            throw new BadRequestException(field + (zeroAllowed ? " cannot be negative" : " must be greater than 0"));
-        }
-        if (amount.stripTrailingZeros().scale() > 2) {
-            throw new BadRequestException(field + " can have at most 2 decimal places");
-        }
-        if (amount.compareTo(MAX_AMOUNT) >= 0) {
-            throw new BadRequestException(field + " is too large");
-        }
-        return amount;
+        return Validation.parseDate(joiningDate, "joiningDate");
     }
 }

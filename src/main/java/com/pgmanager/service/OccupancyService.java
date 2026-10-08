@@ -1,7 +1,6 @@
 package com.pgmanager.service;
 
 import com.pgmanager.dto.CheckInRequest;
-import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Bed;
@@ -109,13 +108,6 @@ public class OccupancyService {
 
     private static UUID parseBedId(CheckInRequest request) {
         Validation.requireBody(request);
-        if (request.bedId() == null || request.bedId().isBlank()) {
-            throw new BadRequestException("bedId is required");
-        }
-        try {
-            return UUID.fromString(request.bedId().trim());
-        } catch (IllegalArgumentException e) {
-            throw new BadRequestException("bedId must be a valid UUID");
-        }
+        return Validation.requireUuid(request.bedId(), "bedId");
     }
 }
