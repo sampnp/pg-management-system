@@ -4,12 +4,17 @@ import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.Database;
 import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.HealthController;
+import com.pgmanager.exception.GlobalErrorHandler;
+import com.pgmanager.model.Role;
 import com.pgmanager.repository.UserRepository;
+import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.security.JwtService;
 import com.pgmanager.security.PasswordHasher;
+import com.pgmanager.security.RoleHandler;
 import com.pgmanager.service.AuthService;
 import io.vertx.core.Future;
 import io.vertx.core.VerticleBase;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.sqlclient.Pool;
@@ -58,6 +63,8 @@ public class MainVerticle extends VerticleBase {
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
+        JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
+        GlobalErrorHandler errorHandler = new GlobalErrorHandler();
 
         Router router = Router.router(vertx);
         // BodyHandler must come first: it reads the request body before any async handler (like JWT checks) runs
@@ -68,6 +75,18 @@ public class MainVerticle extends VerticleBase {
         // Public
         router.post("/api/auth/register").handler(authController::register);
         router.post("/api/auth/login").handler(authController::login);
+
+        // Protected: each handler runs in order and calls ctx.next() to pass the request on
+        router.get("/api/auth/me").handler(jwtAuth).handler(authController::me);
+        router.get("/api/admin/test")
+                .handler(jwtAuth)
+                .handler(RoleHandler.requireRole(Role.ADMIN))
+                .handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
+
+        // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
+        router.route().failureHandler(errorHandler);
+        router.errorHandler(404, errorHandler);
+        router.errorHandler(405, errorHandler);
         return router;
     }
 }

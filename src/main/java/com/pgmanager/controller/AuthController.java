@@ -4,6 +4,7 @@ import com.pgmanager.dto.LoginRequest;
 import com.pgmanager.dto.LoginResponse;
 import com.pgmanager.dto.RegisterRequest;
 import com.pgmanager.dto.UserResponse;
+import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.service.AuthService;
 import io.vertx.ext.web.RoutingContext;
 
@@ -37,5 +38,10 @@ public class AuthController {
         authService.login(request)
                 .onSuccess(token -> ctx.json(new LoginResponse(token)))
                 .onFailure(ctx::fail);
+    }
+
+    /** GET /api/auth/me - answered from the verified token, no database call needed. */
+    public void me(RoutingContext ctx) {
+        ctx.json(JwtAuthHandler.currentUser(ctx));
     }
 }
