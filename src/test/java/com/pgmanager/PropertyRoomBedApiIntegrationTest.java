@@ -60,11 +60,13 @@ class PropertyRoomBedApiIntegrationTest extends ApiTestBase {
         assertEquals(1, beds.size());
         assertEquals("A", beds.getJsonObject(0).getString("bedNumber"));
 
-        HttpResponse<Buffer> occupied = send(PATCH, "/api/beds/" + bedId + "/status", adminToken, statusJson("OCCUPIED"));
-        assertEquals(200, occupied.statusCode());
-        assertEquals("OCCUPIED", send(GET, "/api/beds/" + bedId, adminToken, null).bodyAsJsonObject().getString("status"));
+        // Since Phase 4 a bed only becomes OCCUPIED through tenant check-in, not by setting the status by hand
+        assertError(send(PATCH, "/api/beds/" + bedId + "/status", adminToken, statusJson("OCCUPIED")), 409, "CONFLICT",
+                "A bed can only become OCCUPIED by checking a tenant in");
+        assertEquals("AVAILABLE", send(GET, "/api/beds/" + bedId, adminToken, null).bodyAsJsonObject().getString("status"));
 
         HttpResponse<Buffer> available = send(PATCH, "/api/beds/" + bedId + "/status", adminToken, statusJson("available"));
+        assertEquals(200, available.statusCode());
         assertEquals("AVAILABLE", available.bodyAsJsonObject().getString("status"));
     }
 
@@ -288,7 +290,7 @@ class PropertyRoomBedApiIntegrationTest extends ApiTestBase {
         String roomId = createRoom(createProperty("Bed Delete PG"), "101", 2);
         String freeBed = createBed(roomId, "A");
         String occupiedBed = createBed(roomId, "B");
-        send(PATCH, "/api/beds/" + occupiedBed + "/status", token, statusJson("OCCUPIED"));
+        checkInNewTenant(occupiedBed);
 
         assertEquals(204, send(DELETE, "/api/beds/" + freeBed, token, null).statusCode());
         assertError(send(GET, "/api/beds/" + freeBed, token, null), 404, "NOT_FOUND", "Bed not found");
@@ -307,6 +309,15 @@ class PropertyRoomBedApiIntegrationTest extends ApiTestBase {
 
     private static String createBed(String roomId, String bedNumber) throws Exception {
         return createAndGetId(POST, "/api/rooms/" + roomId + "/beds", bedJson(bedNumber));
+    }
+
+    /** The only way to make a bed OCCUPIED: create a tenant and check them in. */
+    private static void checkInNewTenant(String bedId) throws Exception {
+        JsonObject tenant = new JsonObject().put("name", "Bed Tenant").put("phone", "9876543210")
+                .put("joiningDate", "2026-10-01").put("monthlyRent", 8000).put("securityDeposit", 5000);
+        String tenantId = createAndGetId(POST, "/api/tenants", tenant);
+        HttpResponse<Buffer> response = send(POST, "/api/tenants/" + tenantId + "/check-in", token, new JsonObject().put("bedId", bedId));
+        assertEquals(200, response.statusCode(), () -> "Check-in failed: " + response.bodyAsString());
     }
 
     private static String createAndGetId(HttpMethod method, String path, JsonObject body) throws Exception {

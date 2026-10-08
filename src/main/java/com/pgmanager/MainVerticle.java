@@ -89,7 +89,7 @@ public class MainVerticle extends VerticleBase {
         TenantBedHistoryRepository historyRepository = new TenantBedHistoryRepository();
         PropertyService propertyService = new PropertyService(propertyRepository);
         RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
-        BedService bedService = new BedService(roomRepository, bedRepository);
+        BedService bedService = new BedService(pool, roomRepository, bedRepository, historyRepository);
         TenantService tenantService = new TenantService(tenantRepository);
         OccupancyService occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository);
 

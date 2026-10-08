@@ -59,11 +59,6 @@ public class BedRepository {
                 .recover(err -> Future.failedFuture(translateWriteError(err)));
     }
 
-    /** Returns the updated bed, or empty if no bed has this id. */
-    public Future<Optional<Bed>> updateStatus(UUID id, BedStatus status) {
-        return updateStatus(pool, id, status);
-    }
-
     /**
      * Same as findById, but locks the bed row until the transaction ends (FOR UPDATE).
      * If two check-ins race for the same bed, the second one waits here and then sees OCCUPIED.

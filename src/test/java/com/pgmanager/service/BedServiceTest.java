@@ -1,5 +1,6 @@
 package com.pgmanager.service;
 
+import com.pgmanager.MockTransactions;
 import com.pgmanager.dto.BedRequest;
 import com.pgmanager.dto.BedStatusRequest;
 import com.pgmanager.exception.BadRequestException;
@@ -7,15 +8,20 @@ import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Bed;
 import com.pgmanager.model.BedStatus;
+import com.pgmanager.model.Occupancy;
 import com.pgmanager.model.Room;
 import com.pgmanager.repository.BedRepository;
 import com.pgmanager.repository.RoomRepository;
+import com.pgmanager.repository.TenantBedHistoryRepository;
 import io.vertx.core.Future;
+import io.vertx.sqlclient.Pool;
+import io.vertx.sqlclient.SqlConnection;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,15 +42,21 @@ class BedServiceTest {
 
     private final Room room = new Room(UUID.randomUUID(), UUID.randomUUID(), "101", 2);
 
+    private final SqlConnection tx = mock(SqlConnection.class);
+
     private RoomRepository roomRepository;
     private BedRepository bedRepository;
+    private TenantBedHistoryRepository historyRepository;
     private BedService bedService;
 
     @BeforeEach
     void setUp() {
+        Pool pool = mock(Pool.class);
+        MockTransactions.runInline(pool, tx);
         roomRepository = mock(RoomRepository.class);
         bedRepository = mock(BedRepository.class);
-        bedService = new BedService(roomRepository, bedRepository);
+        historyRepository = mock(TenantBedHistoryRepository.class);
+        bedService = new BedService(pool, roomRepository, bedRepository, historyRepository);
     }
 
     @Test
@@ -113,8 +125,9 @@ class BedServiceTest {
     @ParameterizedTest
     @ValueSource(strings = {"OCCUPIED", "occupied", " Occupied "})
     void statusIsParsedCaseInsensitively(String status) throws Exception {
-        UUID bedId = UUID.randomUUID();
-        when(bedRepository.updateStatus(bedId, BedStatus.OCCUPIED))
+        UUID bedId = bedExists(BedStatus.OCCUPIED);
+        bedHasCurrentTenant(bedId, true);
+        when(bedRepository.updateStatus(tx, bedId, BedStatus.OCCUPIED))
                 .thenReturn(Future.succeededFuture(Optional.of(new Bed(bedId, room.id(), "A", BedStatus.OCCUPIED))));
 
         Bed result = await(bedService.updateStatus(bedId, new BedStatusRequest(status)));
@@ -123,12 +136,37 @@ class BedServiceTest {
     }
 
     @Test
-    void changeStatusBackToAvailable() throws Exception {
-        UUID bedId = UUID.randomUUID();
-        when(bedRepository.updateStatus(bedId, BedStatus.AVAILABLE))
+    void setAvailableOnBedWithoutTenantIsAllowed() throws Exception {
+        UUID bedId = bedExists(BedStatus.OCCUPIED);   // e.g. marked OCCUPIED by hand before check-in existed
+        bedHasCurrentTenant(bedId, false);
+        when(bedRepository.updateStatus(tx, bedId, BedStatus.AVAILABLE))
                 .thenReturn(Future.succeededFuture(Optional.of(new Bed(bedId, room.id(), "A", BedStatus.AVAILABLE))));
 
         assertEquals(BedStatus.AVAILABLE, await(bedService.updateStatus(bedId, new BedStatusRequest("AVAILABLE"))).status());
+    }
+
+    @Test
+    void setOccupiedWithoutTenantFailsWith409() throws Exception {
+        UUID bedId = bedExists(BedStatus.AVAILABLE);
+        bedHasCurrentTenant(bedId, false);
+
+        Throwable error = awaitFailure(bedService.updateStatus(bedId, new BedStatusRequest("OCCUPIED")));
+
+        assertInstanceOf(ConflictException.class, error);
+        assertEquals("A bed can only become OCCUPIED by checking a tenant in", error.getMessage());
+        verify(bedRepository, never()).updateStatus(any(), any(), any());
+    }
+
+    @Test
+    void setAvailableWhileTenantIsCheckedInFailsWith409() throws Exception {
+        UUID bedId = bedExists(BedStatus.OCCUPIED);
+        bedHasCurrentTenant(bedId, true);
+
+        Throwable error = awaitFailure(bedService.updateStatus(bedId, new BedStatusRequest("AVAILABLE")));
+
+        assertInstanceOf(ConflictException.class, error);
+        assertEquals("Bed has a checked-in tenant; check the tenant out instead", error.getMessage());
+        verify(bedRepository, never()).updateStatus(any(), any(), any());
     }
 
     @Test
@@ -143,9 +181,23 @@ class BedServiceTest {
     @Test
     void statusChangeOfMissingBedFailsWith404() throws Exception {
         UUID bedId = UUID.randomUUID();
-        when(bedRepository.updateStatus(bedId, BedStatus.OCCUPIED)).thenReturn(Future.succeededFuture(Optional.empty()));
+        when(bedRepository.findByIdForUpdate(tx, bedId)).thenReturn(Future.succeededFuture(Optional.empty()));
 
         assertInstanceOf(NotFoundException.class, awaitFailure(bedService.updateStatus(bedId, new BedStatusRequest("OCCUPIED"))));
+    }
+
+    private UUID bedExists(BedStatus status) {
+        UUID bedId = UUID.randomUUID();
+        when(bedRepository.findByIdForUpdate(tx, bedId))
+                .thenReturn(Future.succeededFuture(Optional.of(new Bed(bedId, room.id(), "A", status))));
+        return bedId;
+    }
+
+    private void bedHasCurrentTenant(UUID bedId, boolean hasTenant) {
+        Optional<Occupancy> stay = hasTenant
+                ? Optional.of(new Occupancy(UUID.randomUUID(), UUID.randomUUID(), bedId, room.id(), room.propertyId(), Instant.now(), null))
+                : Optional.empty();
+        when(historyRepository.findCurrentByBedId(tx, bedId)).thenReturn(Future.succeededFuture(stay));
     }
 
     @Test

@@ -34,6 +34,12 @@ public class TenantBedHistoryRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(TenantBedHistoryRepository::toOccupancy));
     }
 
+    public Future<Optional<Occupancy>> findCurrentByBedId(SqlClient client, UUID bedId) {
+        return client.preparedQuery(SELECT_OCCUPANCY + "WHERE h.bed_id = $1 AND h.check_out IS NULL")
+                .execute(Tuple.of(bedId))
+                .map(rows -> DbUtils.firstRow(rows).map(TenantBedHistoryRepository::toOccupancy));
+    }
+
     /** All stays of a tenant, newest first. */
     public Future<List<Occupancy>> findByTenantId(SqlClient client, UUID tenantId) {
         return client.preparedQuery(SELECT_OCCUPANCY + "WHERE h.tenant_id = $1 ORDER BY h.check_in DESC, h.id DESC")
