@@ -69,12 +69,20 @@ class JwtServiceTest {
     }
 
     @Test
+    void tokenVersionTravelsInTheToken() throws Exception {
+        User afterPasswordChange = new User(user.id(), "Sambit", "sambit@example.com", "hash", Role.MANAGER, Instant.now(), null, true, 2);
+
+        assertEquals(2, await(jwtService.verify(jwtService.generateToken(afterPasswordChange))).tokenVersion());
+    }
+
+    @Test
     void tokenContainsExpectedClaims() {
         JsonObject claims = decodePayload(jwtService.generateToken(user));
 
         assertEquals(user.id().toString(), claims.getString("sub"));
         assertEquals("sambit@example.com", claims.getString("email"));
         assertEquals("MANAGER", claims.getString("role"));
+        assertEquals(0, claims.getInteger("ver"));
         assertNotNull(claims.getLong("iat"));
         assertEquals(EXPIRATION_SECONDS, claims.getLong("exp") - claims.getLong("iat"));
     }

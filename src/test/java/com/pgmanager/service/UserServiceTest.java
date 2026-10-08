@@ -1,5 +1,6 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.AccountStatusRequest;
 import com.pgmanager.dto.RoleRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
@@ -24,6 +25,7 @@ import java.util.stream.Stream;
 import static com.pgmanager.TestFutures.await;
 import static com.pgmanager.TestFutures.awaitFailure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -120,6 +122,47 @@ class UserServiceTest {
         assertInstanceOf(ConflictException.class, error);
         assertEquals("The role of a tenant account cannot be changed", error.getMessage());
         verify(userRepository, never()).updateRole(any(), any());
+    }
+
+    @Test
+    void adminCanSwitchAnAccountOff() throws Exception {
+        User switchedOff = new User(userId, "Sambit", "sambit@example.com", "hash", Role.MANAGER, Instant.now(), null, false, 0);
+        when(userRepository.setActive(userId, false)).thenReturn(Future.succeededFuture(Optional.of(switchedOff)));
+
+        assertFalse(await(userService.setActive(admin, userId, new AccountStatusRequest(false))).active());
+        verify(userRepository).setActive(userId, false);
+    }
+
+    @Test
+    void adminCannotSwitchOffTheirOwnAccount() throws Exception {
+        Throwable error = awaitFailure(userService.setActive(admin, admin.id(), new AccountStatusRequest(false)));
+
+        assertInstanceOf(BadRequestException.class, error);
+        assertEquals("You cannot switch off or on your own account", error.getMessage());
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    void switchingAnAccountNeedsTheActiveValue() throws Exception {
+        Throwable error = awaitFailure(userService.setActive(admin, userId, new AccountStatusRequest(null)));
+
+        assertInstanceOf(BadRequestException.class, error);
+        assertEquals("active is required", error.getMessage());
+    }
+
+    @Test
+    void managerCannotSwitchAccounts() throws Exception {
+        AuthUser manager = new AuthUser(UUID.randomUUID(), "manager@example.com", Role.MANAGER);
+
+        assertInstanceOf(ForbiddenException.class, awaitFailure(userService.setActive(manager, userId, new AccountStatusRequest(false))));
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    void switchingUnknownAccountFailsWith404() throws Exception {
+        when(userRepository.setActive(userId, true)).thenReturn(Future.succeededFuture(Optional.empty()));
+
+        assertInstanceOf(NotFoundException.class, awaitFailure(userService.setActive(admin, userId, new AccountStatusRequest(true))));
     }
 
     @Test

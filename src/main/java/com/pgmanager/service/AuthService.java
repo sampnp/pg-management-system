@@ -163,10 +163,17 @@ public class AuthService {
 
         return userRepository.findByEmail(normalizeEmail(request.email()))
                 .compose(user -> vertx.executeBlocking(() -> checkPassword(user, request.password()), false))
-                .compose(user -> user.isPresent()
-                        ? Future.succeededFuture(jwtService.generateToken(user.get()))
+                .compose(user -> {
+                    if (user.isEmpty()) {
                         // Same message for unknown email and wrong password, so attackers can't discover accounts
-                        : Future.failedFuture(new UnauthorizedException(INVALID_CREDENTIALS)));
+                        return Future.failedFuture(new UnauthorizedException(INVALID_CREDENTIALS));
+                    }
+                    if (!user.get().active()) {
+                        // Only said after a correct password, so it doesn't reveal anything to a guesser
+                        return Future.failedFuture(new UnauthorizedException("Account is disabled"));
+                    }
+                    return Future.succeededFuture(jwtService.generateToken(user.get()));
+                });
     }
 
     private Optional<User> checkPassword(Optional<User> user, String password) {

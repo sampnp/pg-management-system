@@ -15,7 +15,7 @@ import java.util.UUID;
 /** SQL for the users table. All queries are parameterized ($1, $2...) so user input can never change the SQL. */
 public class UserRepository {
 
-    private static final String COLUMNS = "id, name, email, password_hash, role, created_at, tenant_id";
+    private static final String COLUMNS = "id, name, email, password_hash, role, created_at, tenant_id, active, token_version";
 
     private final Pool pool;
 
@@ -65,6 +65,13 @@ public class UserRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(UserRepository::toUser));
     }
 
+    /** Switches an account on or off. Empty if no user has this id. */
+    public Future<Optional<User>> setActive(UUID id, boolean active) {
+        return pool.preparedQuery("UPDATE users SET active = $2 WHERE id = $1 RETURNING " + COLUMNS)
+                .execute(Tuple.of(id, active))
+                .map(rows -> DbUtils.firstRow(rows).map(UserRepository::toUser));
+    }
+
     private static Throwable translateWriteError(Throwable err) {
         if (DbUtils.isUniqueViolation(err)) {
             return "uq_users_tenant".equals(DbUtils.violatedConstraint(err))
@@ -85,6 +92,8 @@ public class UserRepository {
                 row.getString("password_hash"),
                 Role.valueOf(row.getString("role")),
                 row.getOffsetDateTime("created_at").toInstant(),
-                row.getUUID("tenant_id"));
+                row.getUUID("tenant_id"),
+                row.getBoolean("active"),
+                row.getInteger("token_version"));
     }
 }

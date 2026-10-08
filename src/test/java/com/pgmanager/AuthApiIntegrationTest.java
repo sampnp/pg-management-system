@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Set;
 import java.util.UUID;
 
 import static com.pgmanager.TestFutures.await;
@@ -172,8 +173,8 @@ class AuthApiIntegrationTest extends ApiTestBase {
         String newToken = login(email, "password123").bodyAsJsonObject().getString("token");
         assertEquals("ADMIN", send(HttpMethod.GET, "/api/auth/me", newToken, null).bodyAsJsonObject().getString("role"));
         assertEquals(200, send(HttpMethod.GET, "/api/admin/test", newToken, null).statusCode());
-        // A JWT is not changed after it is issued: the old token keeps the old role until it expires
-        assertEquals(403, send(HttpMethod.GET, "/api/admin/test", oldToken, null).statusCode());
+        // The role is read from the database on every request, so even the token from before the promotion has it now
+        assertEquals(200, send(HttpMethod.GET, "/api/admin/test", oldToken, null).statusCode());
     }
 
     @Test
@@ -254,6 +255,82 @@ class AuthApiIntegrationTest extends ApiTestBase {
         assertError(send(HttpMethod.POST, "/api/admin/users", adminToken, new JsonObject()
                         .put("name", "Ravi").put("email", takenEmail).put("password", "password123").put("role", "MANAGER")),
                 409, "CONFLICT", "Email already exists");
+    }
+
+    // ---------- the account is checked on every request ----------
+
+    @Test
+    void demotionAppliesToAnExistingTokenImmediately() throws Exception {
+        String email = uniqueEmail();
+        String userId = registerUser(email);
+        setRoleInDatabase(email, "ADMIN");
+        String token = login(email, "password123").bodyAsJsonObject().getString("token");
+        assertEquals(200, send(HttpMethod.GET, "/api/admin/test", token, null).statusCode());
+
+        send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/role", registerAndLogin("ADMIN"), new JsonObject().put("role", "MANAGER"));
+
+        assertError(send(HttpMethod.GET, "/api/admin/test", token, null), 403, "FORBIDDEN", "Insufficient permissions");
+        assertEquals("MANAGER", send(HttpMethod.GET, "/api/auth/me", token, null).bodyAsJsonObject().getString("role"));
+    }
+
+    @Test
+    void switchedOffAccountIsLockedOutAtOnceAndCanBeSwitchedOnAgain() throws Exception {
+        String adminToken = registerAndLogin("ADMIN");
+        String email = uniqueEmail();
+        String userId = registerUser(email);
+        String token = login(email, "password123").bodyAsJsonObject().getString("token");
+        assertEquals(200, send(HttpMethod.GET, "/api/properties", token, null).statusCode());
+
+        HttpResponse<Buffer> switchedOff = send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/active", adminToken,
+                new JsonObject().put("active", false));
+        assertEquals(200, switchedOff.statusCode(), switchedOff::bodyAsString);
+        assertFalse(switchedOff.bodyAsJsonObject().getBoolean("active"));
+
+        assertError(send(HttpMethod.GET, "/api/properties", token, null), 401, "UNAUTHORIZED", "Account is disabled");
+        assertError(login(email, "password123"), 401, "UNAUTHORIZED", "Account is disabled");
+
+        send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/active", adminToken, new JsonObject().put("active", true));
+        assertEquals(200, send(HttpMethod.GET, "/api/properties", token, null).statusCode());
+        assertEquals(200, login(email, "password123").statusCode());
+    }
+
+    @Test
+    void switchingAccountsIsAdminOnlyAndValidated() throws Exception {
+        String adminToken = registerAndLogin("ADMIN");
+        String adminId = send(HttpMethod.GET, "/api/auth/me", adminToken, null).bodyAsJsonObject().getString("id");
+        String userId = registerUser(uniqueEmail());
+
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/active", registerAndLogin("MANAGER"), new JsonObject().put("active", false)),
+                403, "FORBIDDEN", "Insufficient permissions");
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/active", adminToken, new JsonObject()),
+                400, "BAD_REQUEST", "active is required");
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + adminId + "/active", adminToken, new JsonObject().put("active", false)),
+                400, "BAD_REQUEST", "You cannot switch off or on your own account");
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + UUID.randomUUID() + "/active", adminToken, new JsonObject().put("active", false)),
+                404, "NOT_FOUND", "User not found");
+    }
+
+    @Test
+    void tokenOfADeletedTenantLoginStopsWorking() throws Exception {
+        String managerToken = registerAndLogin("MANAGER");
+        String tenantId = send(HttpMethod.POST, "/api/tenants", managerToken, new JsonObject().put("name", "Short Stay").put("phone", "9876543210")
+                .put("joiningDate", "2026-10-01").put("monthlyRent", 5000).put("securityDeposit", 0)).bodyAsJsonObject().getString("id");
+        String email = uniqueEmail();
+        send(HttpMethod.POST, "/api/tenants/" + tenantId + "/account", managerToken, new JsonObject().put("email", email).put("password", "password123"));
+        String tenantToken = login(email, "password123").bodyAsJsonObject().getString("token");
+        assertEquals(200, send(HttpMethod.GET, "/api/auth/me", tenantToken, null).statusCode());
+
+        // Deleting the tenant deletes their login (ON DELETE CASCADE); the token is refused straight away
+        assertEquals(204, send(HttpMethod.DELETE, "/api/tenants/" + tenantId, managerToken, null).statusCode());
+
+        assertError(send(HttpMethod.GET, "/api/auth/me", tenantToken, null), 401, "UNAUTHORIZED", "Invalid or expired token");
+    }
+
+    @Test
+    void meDoesNotShowInternalTokenDetails() throws Exception {
+        JsonObject me = send(HttpMethod.GET, "/api/auth/me", registerAndLogin("MANAGER"), null).bodyAsJsonObject();
+
+        assertEquals(Set.of("id", "email", "role", "tenantId"), me.fieldNames());
     }
 
     // ---------- existing behaviour ----------

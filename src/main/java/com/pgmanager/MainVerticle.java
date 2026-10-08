@@ -145,7 +145,7 @@ public class MainVerticle extends VerticleBase {
         PaymentController paymentController = new PaymentController(paymentService);
         MaintenanceController maintenanceController = new MaintenanceController(maintenanceService);
         DashboardController dashboardController = new DashboardController(dashboardService);
-        JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
+        JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService, userRepository);
         Handler<RoutingContext> staffOnly = RoleHandler.requireRole(Role.ADMIN, Role.MANAGER);
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
 
@@ -167,6 +167,7 @@ public class MainVerticle extends VerticleBase {
         router.get("/api/admin/test").handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
         router.post("/api/admin/users").handler(authController::createStaffAccount);
         router.patch("/api/admin/users/:id/role").handler(userController::changeRole);
+        router.patch("/api/admin/users/:id/active").handler(userController::setActive);
 
         // A tenant may read their own maintenance history, so this route is added BEFORE the staff-only
         // /api/tenants* guard below. Vert.x runs matching routes in the order they were added, and this route

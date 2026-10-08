@@ -325,6 +325,22 @@ class AuthServiceTest {
     }
 
     @Test
+    void switchedOffAccountCannotLogIn() throws Exception {
+        User stored = storedUser("password123");
+        User switchedOff = new User(stored.id(), stored.name(), stored.email(), stored.passwordHash(), Role.MANAGER,
+                stored.createdAt(), null, false, 0);
+        when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(switchedOff)));
+
+        Throwable error = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "password123")));
+        assertInstanceOf(UnauthorizedException.class, error);
+        assertEquals("Account is disabled", error.getMessage());
+
+        // With a wrong password it gives nothing away: same answer as for any wrong password
+        Throwable wrongPassword = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "wrong-password")));
+        assertEquals("Invalid email or password", wrongPassword.getMessage());
+    }
+
+    @Test
     void loginWithWrongPasswordFailsWithUnauthorized() throws Exception {
         when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(storedUser("password123"))));
 
