@@ -1,5 +1,6 @@
 package com.pgmanager.controller;
 
+import com.pgmanager.dto.ChangePasswordRequest;
 import com.pgmanager.dto.CreateUserRequest;
 import com.pgmanager.dto.LoginRequest;
 import com.pgmanager.dto.LoginResponse;
@@ -59,6 +60,13 @@ public class AuthController {
                     ctx.response().setStatusCode(201);
                     ctx.json(UserResponse.from(user));
                 })
+                .onFailure(ctx::fail);
+    }
+
+    /** PATCH /api/auth/password - the caller changes their own password and gets a new token. */
+    public void changePassword(RoutingContext ctx) {
+        authService.changePassword(JwtAuthHandler.currentUser(ctx), ctx.body().asPojo(ChangePasswordRequest.class))
+                .onSuccess(token -> ctx.json(new LoginResponse(token)))
                 .onFailure(ctx::fail);
     }
 

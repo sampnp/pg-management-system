@@ -65,6 +65,16 @@ public class UserRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(UserRepository::toUser));
     }
 
+    /**
+     * Saves a new password hash and increases token_version, so every token issued before stops working.
+     * Empty if no user has this id.
+     */
+    public Future<Optional<User>> updatePassword(UUID id, String passwordHash) {
+        return pool.preparedQuery("UPDATE users SET password_hash = $2, token_version = token_version + 1 WHERE id = $1 RETURNING " + COLUMNS)
+                .execute(Tuple.of(id, passwordHash))
+                .map(rows -> DbUtils.firstRow(rows).map(UserRepository::toUser));
+    }
+
     /** Switches an account on or off. Empty if no user has this id. */
     public Future<Optional<User>> setActive(UUID id, boolean active) {
         return pool.preparedQuery("UPDATE users SET active = $2 WHERE id = $1 RETURNING " + COLUMNS)

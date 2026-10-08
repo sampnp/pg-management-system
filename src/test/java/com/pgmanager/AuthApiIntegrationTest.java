@@ -333,6 +333,69 @@ class AuthApiIntegrationTest extends ApiTestBase {
         assertEquals(Set.of("id", "email", "role", "tenantId"), me.fieldNames());
     }
 
+    // ---------- password change ----------
+
+    @Test
+    void tenantChangesTheirPasswordAndOldPasswordAndTokensStopWorking() throws Exception {
+        String managerToken = registerAndLogin("MANAGER");
+        String tenantId = send(HttpMethod.POST, "/api/tenants", managerToken, new JsonObject().put("name", "Password Tenant").put("phone", "9876543210")
+                .put("joiningDate", "2026-10-01").put("monthlyRent", 5000).put("securityDeposit", 0)).bodyAsJsonObject().getString("id");
+        String email = uniqueEmail();
+        send(HttpMethod.POST, "/api/tenants/" + tenantId + "/account", managerToken, new JsonObject().put("email", email).put("password", "given-by-staff"));
+        String oldToken = login(email, "given-by-staff").bodyAsJsonObject().getString("token");
+
+        HttpResponse<Buffer> changed = send(HttpMethod.PATCH, "/api/auth/password", oldToken,
+                new JsonObject().put("currentPassword", "given-by-staff").put("newPassword", "my-own-password"));
+
+        assertEquals(200, changed.statusCode(), changed::bodyAsString);
+        String newToken = changed.bodyAsJsonObject().getString("token");
+        assertEquals("TENANT", send(HttpMethod.GET, "/api/auth/me", newToken, null).bodyAsJsonObject().getString("role"));
+        // Old password and every older token stop working; the new password works
+        assertError(login(email, "given-by-staff"), 401, "UNAUTHORIZED", "Invalid email or password");
+        assertError(send(HttpMethod.GET, "/api/auth/me", oldToken, null), 401, "UNAUTHORIZED", "Invalid or expired token");
+        assertEquals(200, login(email, "my-own-password").statusCode());
+        assertFalse(changed.bodyAsString().contains("my-own-password"));
+    }
+
+    @Test
+    void staffCanChangeTheirOwnPasswordOnly() throws Exception {
+        for (String role : new String[] {"MANAGER", "ADMIN"}) {
+            String email = uniqueEmail();
+            registerUser(email);
+            setRoleInDatabase(email, role);
+            String otherEmail = uniqueEmail();
+            registerUser(otherEmail);
+            String token = login(email, "password123").bodyAsJsonObject().getString("token");
+
+            // There is no way to name another account: extra fields are ignored and only the caller's password changes
+            HttpResponse<Buffer> changed = send(HttpMethod.PATCH, "/api/auth/password", token, new JsonObject()
+                    .put("currentPassword", "password123").put("newPassword", "changed-pass-1").put("email", otherEmail));
+
+            assertEquals(200, changed.statusCode(), changed::bodyAsString);
+            assertEquals(200, login(email, "changed-pass-1").statusCode());
+            assertEquals(200, login(otherEmail, "password123").statusCode(), "the other account must be untouched");
+        }
+    }
+
+    @Test
+    void invalidPasswordChangesAreRejected() throws Exception {
+        String email = uniqueEmail();
+        registerUser(email);
+        String token = login(email, "password123").bodyAsJsonObject().getString("token");
+
+        assertError(send(HttpMethod.PATCH, "/api/auth/password", null, new JsonObject().put("currentPassword", "password123").put("newPassword", "new-password-1")),
+                401, "UNAUTHORIZED", "Missing or invalid Authorization header");
+        assertError(send(HttpMethod.PATCH, "/api/auth/password", token, new JsonObject().put("currentPassword", "wrong-one").put("newPassword", "new-password-1")),
+                400, "BAD_REQUEST", "Current password is incorrect");
+        assertError(send(HttpMethod.PATCH, "/api/auth/password", token, new JsonObject().put("currentPassword", "password123").put("newPassword", "short")),
+                400, "BAD_REQUEST", "newPassword must be at least 8 characters");
+        assertError(send(HttpMethod.PATCH, "/api/auth/password", token, new JsonObject().put("currentPassword", "password123")),
+                400, "BAD_REQUEST", "newPassword is required");
+        // Nothing changed: the original password and token still work
+        assertEquals(200, login(email, "password123").statusCode());
+        assertEquals(200, send(HttpMethod.GET, "/api/auth/me", token, null).statusCode());
+    }
+
     // ---------- existing behaviour ----------
 
     @Test

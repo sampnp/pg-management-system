@@ -161,6 +161,7 @@ public class MainVerticle extends VerticleBase {
 
         // Protected: each handler runs in order and calls ctx.next() to pass the request on
         router.get("/api/auth/me").handler(jwtAuth).handler(authController::me);
+        router.patch("/api/auth/password").handler(jwtAuth).handler(authController::changePassword);
 
         // Admin only: every endpoint under /api/admin requires a valid JWT with the ADMIN role
         router.route("/api/admin*").handler(jwtAuth).handler(RoleHandler.requireRole(Role.ADMIN));

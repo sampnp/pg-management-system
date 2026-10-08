@@ -1,6 +1,7 @@
 package com.pgmanager.service;
 
 import com.pgmanager.config.JwtConfig;
+import com.pgmanager.dto.ChangePasswordRequest;
 import com.pgmanager.dto.CreateUserRequest;
 import com.pgmanager.dto.LoginRequest;
 import com.pgmanager.dto.RegisterRequest;
@@ -29,6 +30,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -40,6 +42,7 @@ import java.util.stream.Stream;
 import static com.pgmanager.TestFutures.await;
 import static com.pgmanager.TestFutures.awaitFailure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -308,6 +311,60 @@ class AuthServiceTest {
         assertInstanceOf(BadRequestException.class, error);
         assertEquals(expectedMessage, error.getMessage());
         verifyNoInteractions(userRepository, tenantRepository);
+    }
+
+    // ---------- password change ----------
+
+    @Test
+    void passwordChangeSavesANewHashAndReturnsATokenWithTheNewVersion() throws Exception {
+        User stored = storedUser("old-password");
+        when(userRepository.findById(stored.id())).thenReturn(Future.succeededFuture(Optional.of(stored)));
+        when(userRepository.updatePassword(eq(stored.id()), anyString())).thenAnswer(call -> Future.succeededFuture(Optional.of(
+                new User(stored.id(), stored.name(), stored.email(), call.getArgument(1), stored.role(), stored.createdAt(), null, true, 1))));
+
+        String token = await(authService.changePassword(caller(stored), new ChangePasswordRequest("old-password", "new-password-1")));
+
+        ArgumentCaptor<String> hash = ArgumentCaptor.forClass(String.class);
+        verify(userRepository).updatePassword(eq(stored.id()), hash.capture());
+        assertTrue(passwordHasher.matches("new-password-1", hash.getValue()));
+        assertFalse(passwordHasher.matches("old-password", hash.getValue()));
+        assertEquals(1, await(jwtService.verify(token)).tokenVersion());
+    }
+
+    @Test
+    void wrongCurrentPasswordIsRejectedWithoutChangingAnything() throws Exception {
+        User stored = storedUser("old-password");
+        when(userRepository.findById(stored.id())).thenReturn(Future.succeededFuture(Optional.of(stored)));
+
+        Throwable error = awaitFailure(authService.changePassword(caller(stored), new ChangePasswordRequest("guess-123", "new-password-1")));
+
+        assertInstanceOf(BadRequestException.class, error);
+        assertEquals("Current password is incorrect", error.getMessage());
+        verify(userRepository, never()).updatePassword(any(), any());
+    }
+
+    static Stream<Arguments> invalidPasswordChanges() {
+        return Stream.of(
+                Arguments.of(null, "Request body is required"),
+                Arguments.of(new ChangePasswordRequest(" ", "new-password-1"), "currentPassword is required"),
+                Arguments.of(new ChangePasswordRequest("old-password", null), "newPassword is required"),
+                Arguments.of(new ChangePasswordRequest("old-password", "short"), "newPassword must be at least 8 characters"),
+                Arguments.of(new ChangePasswordRequest("old-password", "x".repeat(73)), "newPassword must be at most 72 characters"),
+                Arguments.of(new ChangePasswordRequest("old-password", "old-password"), "newPassword must be different from currentPassword"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidPasswordChanges")
+    void invalidPasswordChangeFailsWith400(ChangePasswordRequest request, String expectedMessage) throws Exception {
+        Throwable error = awaitFailure(authService.changePassword(caller(storedUser("old-password")), request));
+
+        assertInstanceOf(BadRequestException.class, error);
+        assertEquals(expectedMessage, error.getMessage());
+        verifyNoInteractions(userRepository);
+    }
+
+    private static AuthUser caller(User user) {
+        return new AuthUser(user.id(), user.email(), user.role());
     }
 
     // ---------- login ----------

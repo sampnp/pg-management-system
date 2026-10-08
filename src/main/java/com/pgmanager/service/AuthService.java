@@ -1,5 +1,6 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.ChangePasswordRequest;
 import com.pgmanager.dto.CreateUserRequest;
 import com.pgmanager.dto.LoginRequest;
 import com.pgmanager.dto.RegisterRequest;
@@ -13,6 +14,7 @@ import com.pgmanager.model.Role;
 import com.pgmanager.model.User;
 import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
+import com.pgmanager.security.AuthUser;
 import com.pgmanager.security.JwtService;
 import com.pgmanager.security.PasswordHasher;
 import io.vertx.core.Future;
@@ -176,6 +178,45 @@ public class AuthService {
                 });
     }
 
+    /**
+     * The caller changes their own password (any role). The current password must be right. All the caller's
+     * existing tokens stop working, including the one used for this request, so a new token is returned.
+     */
+    public Future<String> changePassword(AuthUser caller, ChangePasswordRequest request) {
+        String validationError = passwordChangeError(request);
+        if (validationError != null) {
+            return Future.failedFuture(new BadRequestException(validationError));
+        }
+
+        return userRepository.findById(caller.id())
+                .map(user -> user.orElseThrow(() -> new UnauthorizedException("Invalid or expired token")))
+                .compose(user -> vertx.executeBlocking(() -> passwordHasher.matches(request.currentPassword(), user.passwordHash()), false))
+                .compose(matches -> matches
+                        ? vertx.executeBlocking(() -> passwordHasher.hash(request.newPassword()), false)
+                        // 400, not 401: the caller is logged in, only the value they typed is wrong
+                        : Future.failedFuture(new BadRequestException("Current password is incorrect")))
+                .compose(hash -> userRepository.updatePassword(caller.id(), hash))
+                .map(updated -> jwtService.generateToken(
+                        updated.orElseThrow(() -> new UnauthorizedException("Invalid or expired token"))));
+    }
+
+    private static String passwordChangeError(ChangePasswordRequest request) {
+        if (request == null) {
+            return "Request body is required";
+        }
+        if (isBlank(request.currentPassword())) {
+            return "currentPassword is required";
+        }
+        String newPasswordError = passwordError(request.newPassword(), "newPassword");
+        if (newPasswordError != null) {
+            return newPasswordError;
+        }
+        if (request.newPassword().equals(request.currentPassword())) {
+            return "newPassword must be different from currentPassword";
+        }
+        return null;
+    }
+
     private Optional<User> checkPassword(Optional<User> user, String password) {
         String hash = user.map(User::passwordHash).orElse(dummyHash);
         boolean matches = passwordHasher.matches(password, hash);
@@ -205,14 +246,19 @@ public class AuthService {
         if (trimmed.length() > MAX_EMAIL_LENGTH || !EMAIL_PATTERN.matcher(trimmed).matches()) {
             return "email is not valid";
         }
+        return passwordError(password, "password");
+    }
+
+    /** The password rules for every new password; field is the name used in the message. */
+    private static String passwordError(String password, String field) {
         if (isBlank(password)) {
-            return "password is required";
+            return field + " is required";
         }
         if (password.length() < MIN_PASSWORD_LENGTH) {
-            return "password must be at least " + MIN_PASSWORD_LENGTH + " characters";
+            return field + " must be at least " + MIN_PASSWORD_LENGTH + " characters";
         }
         if (PasswordHasher.exceedsMaxLength(password)) {
-            return "password must be at most " + PasswordHasher.MAX_PASSWORD_BYTES + " characters";
+            return field + " must be at most " + PasswordHasher.MAX_PASSWORD_BYTES + " characters";
         }
         return null;
     }
