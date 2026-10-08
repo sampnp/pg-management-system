@@ -35,6 +35,8 @@ dependencies {
 
     // Lets Vert.x convert Java records/objects to and from JSON
     implementation("com.fasterxml.jackson.core:jackson-databind")
+    // Adds JSON support for java.time types such as LocalDate (tenant joining date)
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
 
     // Flyway + JDBC are used ONLY to run migrations once at startup (on a worker thread).
     // All request-time database access goes through the non-blocking vertx-pg-client.

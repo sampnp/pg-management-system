@@ -2,16 +2,19 @@ package com.pgmanager;
 
 import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.Database;
+import com.pgmanager.config.JsonConfig;
 import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.BedController;
 import com.pgmanager.controller.HealthController;
 import com.pgmanager.controller.PropertyController;
 import com.pgmanager.controller.RoomController;
+import com.pgmanager.controller.TenantController;
 import com.pgmanager.exception.GlobalErrorHandler;
 import com.pgmanager.model.Role;
 import com.pgmanager.repository.BedRepository;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
+import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.security.JwtService;
@@ -21,6 +24,7 @@ import com.pgmanager.service.AuthService;
 import com.pgmanager.service.BedService;
 import com.pgmanager.service.PropertyService;
 import com.pgmanager.service.RoomService;
+import com.pgmanager.service.TenantService;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.VerticleBase;
@@ -52,6 +56,7 @@ public class MainVerticle extends VerticleBase {
 
     @Override
     public Future<?> start() {
+        JsonConfig.configure();
         return Database.migrate(vertx, config.database())
                 .compose(migrated -> {
                     pool = Database.createPool(vertx, config.database());
@@ -77,15 +82,18 @@ public class MainVerticle extends VerticleBase {
         PropertyRepository propertyRepository = new PropertyRepository(pool);
         RoomRepository roomRepository = new RoomRepository(pool);
         BedRepository bedRepository = new BedRepository(pool);
+        TenantRepository tenantRepository = new TenantRepository(pool);
         PropertyService propertyService = new PropertyService(propertyRepository);
         RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
         BedService bedService = new BedService(roomRepository, bedRepository);
+        TenantService tenantService = new TenantService(tenantRepository);
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
         PropertyController propertyController = new PropertyController(propertyService);
         RoomController roomController = new RoomController(roomService);
         BedController bedController = new BedController(bedService);
+        TenantController tenantController = new TenantController(tenantService);
         JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
         Handler<RoutingContext> staffOnly = RoleHandler.requireRole(Role.ADMIN, Role.MANAGER);
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
@@ -107,9 +115,9 @@ public class MainVerticle extends VerticleBase {
                 .handler(RoleHandler.requireRole(Role.ADMIN))
                 .handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
 
-        // Property/room/bed management: protect each whole path prefix once, so every endpoint
+        // Property/room/bed/tenant management: protect each whole path prefix once, so every endpoint
         // under it (including ones added later) requires a valid JWT and an ADMIN or MANAGER role
-        for (String protectedPath : List.of("/api/properties*", "/api/rooms*", "/api/beds*")) {
+        for (String protectedPath : List.of("/api/properties*", "/api/rooms*", "/api/beds*", "/api/tenants*")) {
             router.route(protectedPath).handler(jwtAuth).handler(staffOnly);
         }
 
@@ -131,6 +139,12 @@ public class MainVerticle extends VerticleBase {
         router.put("/api/beds/:id").handler(bedController::update);
         router.patch("/api/beds/:id/status").handler(bedController::updateStatus);
         router.delete("/api/beds/:id").handler(bedController::delete);
+
+        router.post("/api/tenants").handler(tenantController::create);
+        router.get("/api/tenants").handler(tenantController::list);
+        router.get("/api/tenants/:id").handler(tenantController::get);
+        router.put("/api/tenants/:id").handler(tenantController::update);
+        router.delete("/api/tenants/:id").handler(tenantController::delete);
 
         // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
         router.route().failureHandler(errorHandler);
