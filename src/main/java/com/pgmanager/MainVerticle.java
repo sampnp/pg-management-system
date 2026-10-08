@@ -2,6 +2,7 @@ package com.pgmanager;
 
 import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.Database;
+import com.pgmanager.controller.HealthController;
 import io.vertx.core.Future;
 import io.vertx.core.VerticleBase;
 import io.vertx.ext.web.Router;
@@ -42,6 +43,10 @@ public class MainVerticle extends VerticleBase {
     }
 
     private Router createRouter() {
-        return Router.router(vertx);
+        HealthController healthController = new HealthController(pool);
+
+        Router router = Router.router(vertx);
+        router.get("/api/health").handler(healthController::check);
+        return router;
     }
 }
