@@ -17,6 +17,11 @@ repositories {
 
 val vertxVersion = "5.2.1"
 val flywayVersion = "13.10.0"
+val mockitoVersion = "5.24.0"
+val testcontainersVersion = "2.0.5"
+
+// Mockito must be attached as a Java agent on JDK 21+ (dynamic agent loading is being phased out)
+val mockitoAgent = configurations.create("mockitoAgent")
 
 dependencies {
     // The Vert.x BOM keeps all Vert.x (and Jackson) module versions in sync
@@ -39,6 +44,24 @@ dependencies {
 
     implementation("org.slf4j:slf4j-api:2.0.17")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
+
+    testImplementation(platform("org.junit:junit-bom:5.14.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation("org.mockito:mockito-core:$mockitoVersion")
+    mockitoAgent("org.mockito:mockito-core:$mockitoVersion") { isTransitive = false }
+    testImplementation("io.vertx:vertx-web-client")
+    testImplementation("org.testcontainers:testcontainers-postgresql:$testcontainersVersion")
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter:$testcontainersVersion")
+}
+
+tasks.test {
+    useJUnitPlatform()
+    jvmArgs("-javaagent:${mockitoAgent.asPath}")
+    testLogging {
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
 }
 
 application {
