@@ -4,6 +4,7 @@ import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.Cache;
 import com.pgmanager.config.Database;
 import com.pgmanager.config.JsonConfig;
+import com.pgmanager.config.SecurityConfig;
 import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.BedController;
 import com.pgmanager.controller.DashboardController;
@@ -68,6 +69,7 @@ public class MainVerticle extends VerticleBase {
     private final AppConfig config;
     private Pool pool;
     private Redis redis;
+    private AuthService authService;
 
     public MainVerticle(AppConfig config) {
         this.config = config;
@@ -80,11 +82,20 @@ public class MainVerticle extends VerticleBase {
                 .compose(migrated -> {
                     pool = Database.createPool(vertx, config.database());
                     redis = Cache.createClient(vertx, config.redis());
-                    return vertx.createHttpServer()
-                            .requestHandler(createRouter())
-                            .listen(config.httpPort());
+                    Router router = createRouter();
+                    return createFirstAdminIfConfigured()
+                            .compose(v -> vertx.createHttpServer()
+                                    .requestHandler(router)
+                                    .listen(config.httpPort()));
                 })
                 .onSuccess(server -> log.info("HTTP server listening on port {}", server.actualPort()));
+    }
+
+    private Future<Void> createFirstAdminIfConfigured() {
+        SecurityConfig security = config.security();
+        return security.hasBootstrapAdmin()
+                ? authService.createFirstAdmin(security.bootstrapAdminEmail(), security.bootstrapAdminPassword())
+                : Future.succeededFuture();
     }
 
     @Override
@@ -100,7 +111,8 @@ public class MainVerticle extends VerticleBase {
         TenantRepository tenantRepository = new TenantRepository(pool);
         PasswordHasher passwordHasher = new PasswordHasher(PasswordHasher.DEFAULT_COST);
         JwtService jwtService = new JwtService(vertx, config.jwt());
-        AuthService authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService);
+        authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService,
+                config.security().allowPublicRegistration());
         UserService userService = new UserService(userRepository);
 
         // Cleared by every service whose writes change a number on the dashboard
@@ -143,7 +155,7 @@ public class MainVerticle extends VerticleBase {
 
         router.get("/api/health").handler(healthController::check);
 
-        // Public
+        // Public (registration answers 403 unless ALLOW_PUBLIC_REGISTRATION=true)
         router.post("/api/auth/register").handler(authController::register);
         router.post("/api/auth/login").handler(authController::login);
 
@@ -153,6 +165,7 @@ public class MainVerticle extends VerticleBase {
         // Admin only: every endpoint under /api/admin requires a valid JWT with the ADMIN role
         router.route("/api/admin*").handler(jwtAuth).handler(RoleHandler.requireRole(Role.ADMIN));
         router.get("/api/admin/test").handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
+        router.post("/api/admin/users").handler(authController::createStaffAccount);
         router.patch("/api/admin/users/:id/role").handler(userController::changeRole);
 
         // A tenant may read their own maintenance history, so this route is added BEFORE the staff-only

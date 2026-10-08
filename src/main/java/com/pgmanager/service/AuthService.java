@@ -1,10 +1,12 @@
 package com.pgmanager.service;
 
+import com.pgmanager.dto.CreateUserRequest;
 import com.pgmanager.dto.LoginRequest;
 import com.pgmanager.dto.RegisterRequest;
 import com.pgmanager.dto.TenantAccountRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
+import com.pgmanager.exception.ForbiddenException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.exception.UnauthorizedException;
 import com.pgmanager.model.Role;
@@ -15,14 +17,18 @@ import com.pgmanager.security.JwtService;
 import com.pgmanager.security.PasswordHasher;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+/** Creates accounts and logs users in. */
 public class AuthService {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
     static final String INVALID_CREDENTIALS = "Invalid email or password";
     private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
     private static final int MIN_PASSWORD_LENGTH = 8;
@@ -34,24 +40,31 @@ public class AuthService {
     private final TenantRepository tenantRepository;
     private final PasswordHasher passwordHasher;
     private final JwtService jwtService;
+    private final boolean allowPublicRegistration;
     /** Checked when the email is unknown, so "unknown email" and "wrong password" take the same time. */
     private final String dummyHash;
 
     public AuthService(Vertx vertx, UserRepository userRepository, TenantRepository tenantRepository,
-                       PasswordHasher passwordHasher, JwtService jwtService) {
+                       PasswordHasher passwordHasher, JwtService jwtService, boolean allowPublicRegistration) {
         this.vertx = vertx;
         this.userRepository = userRepository;
         this.tenantRepository = tenantRepository;
         this.passwordHasher = passwordHasher;
         this.jwtService = jwtService;
+        this.allowPublicRegistration = allowPublicRegistration;
         this.dummyHash = passwordHasher.hash(UUID.randomUUID().toString());
     }
 
     /**
-     * Public registration always creates a MANAGER. The caller cannot choose a role, so nobody can
-     * make themselves ADMIN here - an existing ADMIN has to promote them (see UserService.changeRole).
+     * Public registration. Disabled unless ALLOW_PUBLIC_REGISTRATION=true, because a MANAGER can see all PG
+     * data; normally an ADMIN creates staff accounts (createStaffAccount). When enabled it always creates a
+     * MANAGER: the caller cannot choose a role, so nobody can make themselves ADMIN here.
      */
     public Future<User> register(RegisterRequest request) {
+        if (!allowPublicRegistration) {
+            return Future.failedFuture(new ForbiddenException(
+                    "Public registration is disabled. Ask an administrator to create your account"));
+        }
         String validationError = validateRegistration(request);
         if (validationError != null) {
             return Future.failedFuture(new BadRequestException(validationError));
@@ -60,6 +73,57 @@ public class AuthService {
         String email = normalizeEmail(request.email());
         return hashIfEmailIsFree(email, request.password())
                 .compose(hash -> userRepository.insert(request.name().trim(), email, hash, Role.MANAGER));
+    }
+
+    /** An ADMIN creates a staff account (POST /api/admin/users). The route checks that the caller is ADMIN. */
+    public Future<User> createStaffAccount(CreateUserRequest request) {
+        return Future.succeededFuture(request)
+                .map(r -> {
+                    String validationError = validateRegistration(
+                            r == null ? null : new RegisterRequest(r.name(), r.email(), r.password()));
+                    if (validationError != null) {
+                        throw new BadRequestException(validationError);
+                    }
+                    return Validation.parseStaffRole(r.role());
+                })
+                .compose(role -> {
+                    String email = normalizeEmail(request.email());
+                    return hashIfEmailIsFree(email, request.password())
+                            .compose(hash -> userRepository.insert(request.name().trim(), email, hash, role));
+                });
+    }
+
+    /**
+     * Creates the first ADMIN at startup from BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD, so a fresh
+     * deployment can be used without public registration or manual SQL. Does nothing once any ADMIN exists,
+     * so the variables are harmless on later restarts (they should still be removed after the first start).
+     * An invalid email or password stops the startup, because it is a configuration mistake.
+     */
+    public Future<Void> createFirstAdmin(String email, String password) {
+        String validationError = credentialsError(email, password);
+        if (validationError != null) {
+            return Future.failedFuture(new IllegalStateException("Invalid BOOTSTRAP_ADMIN settings: " + validationError));
+        }
+        String normalized = normalizeEmail(email);
+        return userRepository.adminExists()
+                .compose(adminExists -> {
+                    if (adminExists) {
+                        log.info("An ADMIN already exists; BOOTSTRAP_ADMIN_* is ignored and can be removed");
+                        return Future.succeededFuture();
+                    }
+                    return userRepository.findByEmail(normalized)
+                            .compose(existing -> {
+                                if (existing.isPresent()) {
+                                    // Never turn an existing (possibly self-registered) account into an ADMIN
+                                    log.warn("BOOTSTRAP_ADMIN_EMAIL {} already belongs to an account; no ADMIN was created", normalized);
+                                    return Future.succeededFuture();
+                                }
+                                return vertx.executeBlocking(() -> passwordHasher.hash(password), false)
+                                        .compose(hash -> userRepository.insert("Administrator", normalized, hash, Role.ADMIN))
+                                        .onSuccess(admin -> log.info("Created the first ADMIN account: {}", admin.email()))
+                                        .mapEmpty();
+                            });
+                });
     }
 
     /**

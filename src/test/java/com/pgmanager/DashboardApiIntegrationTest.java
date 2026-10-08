@@ -3,6 +3,7 @@ package com.pgmanager;
 import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.JwtConfig;
 import com.pgmanager.config.RedisConfig;
+import com.pgmanager.config.SecurityConfig;
 import com.pgmanager.dto.DashboardSummary;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.Json;
@@ -211,7 +212,8 @@ class DashboardApiIntegrationTest extends ApiTestBase {
         }
         AppConfig config = new AppConfig(appPort, databaseConfig(),
                 new JwtConfig("integration-test-secret-at-least-32-chars", 3600),
-                new RedisConfig("localhost", deadRedisPort, 60));
+                new RedisConfig("localhost", deadRedisPort, 60),
+                new SecurityConfig(true, null, null));
         String deploymentId = await(vertx.deployVerticle(new MainVerticle(config)));
         WebClient noRedisClient = WebClient.create(vertx, new WebClientOptions().setDefaultHost("localhost").setDefaultPort(appPort));
         try {

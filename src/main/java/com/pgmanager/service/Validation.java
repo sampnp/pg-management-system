@@ -1,10 +1,12 @@
 package com.pgmanager.service;
 
 import com.pgmanager.exception.BadRequestException;
+import com.pgmanager.model.Role;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+import java.util.Locale;
 import java.util.UUID;
 
 /** Input checks shared by the services. Each method throws BadRequestException (400) on invalid input. */
@@ -54,6 +56,18 @@ final class Validation {
         } catch (DateTimeParseException e) {
             throw new BadRequestException(field + " must be a valid date in YYYY-MM-DD format");
         }
+    }
+
+    /** ADMIN or MANAGER. TENANT accounts are only created for a tenant (POST /api/tenants/:id/account). */
+    static Role parseStaffRole(String value) {
+        if (value == null || value.isBlank()) {
+            throw new BadRequestException("role is required");
+        }
+        String role = value.trim().toUpperCase(Locale.ROOT);
+        if (!role.equals(Role.ADMIN.name()) && !role.equals(Role.MANAGER.name())) {
+            throw new BadRequestException("role must be ADMIN or MANAGER");
+        }
+        return Role.valueOf(role);
     }
 
     /** A money amount: required, at most 2 decimal places, and positive (or zero when zeroAllowed). */

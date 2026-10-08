@@ -1,5 +1,6 @@
 package com.pgmanager.controller;
 
+import com.pgmanager.dto.CreateUserRequest;
 import com.pgmanager.dto.LoginRequest;
 import com.pgmanager.dto.LoginResponse;
 import com.pgmanager.dto.RegisterRequest;
@@ -38,6 +39,16 @@ public class AuthController {
         LoginRequest request = ctx.body().asPojo(LoginRequest.class);
         authService.login(request)
                 .onSuccess(token -> ctx.json(new LoginResponse(token)))
+                .onFailure(ctx::fail);
+    }
+
+    /** POST /api/admin/users - an ADMIN creates a staff account (ADMIN or MANAGER). */
+    public void createStaffAccount(RoutingContext ctx) {
+        authService.createStaffAccount(ctx.body().asPojo(CreateUserRequest.class))
+                .onSuccess(user -> {
+                    ctx.response().setStatusCode(201);
+                    ctx.json(UserResponse.from(user));
+                })
                 .onFailure(ctx::fail);
     }
 

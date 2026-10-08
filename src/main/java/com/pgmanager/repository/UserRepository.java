@@ -35,6 +35,12 @@ public class UserRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(UserRepository::toUser));
     }
 
+    public Future<Boolean> adminExists() {
+        return pool.query("SELECT EXISTS (SELECT 1 FROM users WHERE role = 'ADMIN') AS admin_exists")
+                .execute()
+                .map(rows -> rows.iterator().next().getBoolean("admin_exists"));
+    }
+
     /** Creates a staff account (ADMIN or MANAGER). */
     public Future<User> insert(String name, String email, String passwordHash, Role role) {
         return pool.preparedQuery("INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING " + COLUMNS)

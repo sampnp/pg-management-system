@@ -11,12 +11,10 @@ import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.AuthUser;
 import io.vertx.core.Future;
 
-import java.util.Locale;
 import java.util.UUID;
 
 /**
- * Admin-only user management: changing a staff user's role between ADMIN and MANAGER. This is the only
- * way to get the ADMIN role, because public registration always creates a MANAGER.
+ * Admin-only user management: changing a staff user's role between ADMIN and MANAGER.
  * TENANT accounts are linked to a tenant and keep their role.
  */
 public class UserService {
@@ -40,7 +38,7 @@ public class UserService {
                     if (caller == null || caller.role() != Role.ADMIN) {
                         throw new ForbiddenException("Insufficient permissions");
                     }
-                    Role role = parseRole(Validation.requireBody(r).role());
+                    Role role = Validation.parseStaffRole(Validation.requireBody(r).role());
                     // Stops an admin from accidentally removing their own access (and leaving no admin at all)
                     if (caller.id().equals(userId)) {
                         throw new BadRequestException("You cannot change your own role");
@@ -53,17 +51,5 @@ public class UserService {
                                 ? Future.failedFuture(new ConflictException("The role of a tenant account cannot be changed"))
                                 : userRepository.updateRole(userId, role)))
                 .map(user -> user.orElseThrow(() -> new NotFoundException(USER_NOT_FOUND)));
-    }
-
-    private static Role parseRole(String value) {
-        if (value == null || value.isBlank()) {
-            throw new BadRequestException("role is required");
-        }
-        String role = value.trim().toUpperCase(Locale.ROOT);
-        // Only staff roles can be given here; TENANT accounts are created through POST /api/tenants/:id/account
-        if (!role.equals(Role.ADMIN.name()) && !role.equals(Role.MANAGER.name())) {
-            throw new BadRequestException("role must be ADMIN or MANAGER");
-        }
-        return Role.valueOf(role);
     }
 }

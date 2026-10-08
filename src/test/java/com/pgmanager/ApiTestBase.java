@@ -5,6 +5,7 @@ import com.pgmanager.config.Database;
 import com.pgmanager.config.DatabaseConfig;
 import com.pgmanager.config.JwtConfig;
 import com.pgmanager.config.RedisConfig;
+import com.pgmanager.config.SecurityConfig;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
@@ -49,15 +50,47 @@ abstract class ApiTestBase {
     @BeforeAll
     static void startApplication() throws Exception {
         int port = freePort();
-        AppConfig config = new AppConfig(
-                port,
-                databaseConfig(),
-                new JwtConfig("integration-test-secret-at-least-32-chars", 3600),
-                redisConfig());
+        // The tests create their users through public registration, so it is switched on here
+        AppConfig config = testConfig(port, databaseConfig(), new SecurityConfig(true, null, null));
 
         vertx = Vertx.vertx();
         await(vertx.deployVerticle(new MainVerticle(config)));
         client = WebClient.create(vertx, new WebClientOptions().setDefaultHost("localhost").setDefaultPort(port));
+    }
+
+    /** The configuration the tests use, with the given port, database and account settings. */
+    protected static AppConfig testConfig(int port, DatabaseConfig database, SecurityConfig security) {
+        return new AppConfig(port, database, new JwtConfig("integration-test-secret-at-least-32-chars", 3600),
+                redisConfig(), security);
+    }
+
+    /** A second copy of the application, started with different settings (and stopped again by the test). */
+    protected record TestApp(String deploymentId, WebClient client) {
+    }
+
+    protected static TestApp startApp(AppConfig config) throws Exception {
+        String deploymentId = await(vertx.deployVerticle(new MainVerticle(config)));
+        return new TestApp(deploymentId,
+                WebClient.create(vertx, new WebClientOptions().setDefaultHost("localhost").setDefaultPort(config.httpPort())));
+    }
+
+    protected static void stopApp(TestApp app) throws Exception {
+        app.client().close();
+        await(vertx.undeploy(app.deploymentId()));
+    }
+
+    /** Creates a new, empty database in the test PostgreSQL, e.g. to check that all migrations run from scratch. */
+    protected static DatabaseConfig createEmptyDatabase() throws Exception {
+        String name = "test_" + UUID.randomUUID().toString().replace("-", "");
+        Pool db = Database.createPool(vertx, databaseConfig());
+        try {
+            // A database name can't be a $1 parameter; this one is generated above, never user input
+            await(db.query("CREATE DATABASE " + name).execute());
+        } finally {
+            await(db.close());
+        }
+        DatabaseConfig base = databaseConfig();
+        return new DatabaseConfig(base.host(), base.port(), name, base.user(), base.password());
     }
 
     @AfterAll
@@ -78,7 +111,13 @@ abstract class ApiTestBase {
 
     /** Sends a request with an optional Bearer token and optional JSON body. */
     protected static HttpResponse<Buffer> send(HttpMethod method, String path, String token, JsonObject body) throws Exception {
-        HttpRequest<Buffer> request = client.request(method, path);
+        return send(client, method, path, token, body);
+    }
+
+    /** Same as send(...), to another copy of the application. */
+    protected static HttpResponse<Buffer> send(WebClient webClient, HttpMethod method, String path, String token, JsonObject body)
+            throws Exception {
+        HttpRequest<Buffer> request = webClient.request(method, path);
         if (token != null) {
             request.putHeader("Authorization", "Bearer " + token);
         }
@@ -133,7 +172,7 @@ abstract class ApiTestBase {
         return "user-" + UUID.randomUUID() + "@example.com";
     }
 
-    private static int freePort() throws IOException {
+    protected static int freePort() throws IOException {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
         }

@@ -213,6 +213,49 @@ class AuthApiIntegrationTest extends ApiTestBase {
                 404, "NOT_FOUND", "User not found");
     }
 
+    // ---------- staff accounts created by an ADMIN ----------
+
+    @Test
+    void adminCreatesStaffAccountsThatCanLogIn() throws Exception {
+        String adminToken = registerAndLogin("ADMIN");
+        for (String role : new String[] {"MANAGER", "ADMIN"}) {
+            String email = uniqueEmail();
+            HttpResponse<Buffer> created = send(HttpMethod.POST, "/api/admin/users", adminToken, new JsonObject()
+                    .put("name", "New " + role).put("email", email).put("password", "password123").put("role", role));
+
+            assertEquals(201, created.statusCode(), created::bodyAsString);
+            assertEquals(role, created.bodyAsJsonObject().getString("role"));
+            assertFalse(created.bodyAsString().contains("password123"));
+            String token = login(email, "password123").bodyAsJsonObject().getString("token");
+            assertEquals(role, send(HttpMethod.GET, "/api/auth/me", token, null).bodyAsJsonObject().getString("role"));
+        }
+    }
+
+    @Test
+    void onlyAnAdminCanCreateStaffAccounts() throws Exception {
+        JsonObject body = new JsonObject().put("name", "Sneaky").put("email", uniqueEmail()).put("password", "password123").put("role", "ADMIN");
+
+        assertError(send(HttpMethod.POST, "/api/admin/users", null, body), 401, "UNAUTHORIZED", "Missing or invalid Authorization header");
+        assertError(send(HttpMethod.POST, "/api/admin/users", registerAndLogin("MANAGER"), body), 403, "FORBIDDEN", "Insufficient permissions");
+    }
+
+    @Test
+    void invalidStaffAccountsAreRejected() throws Exception {
+        String adminToken = registerAndLogin("ADMIN");
+        String takenEmail = uniqueEmail();
+        register("Taken", takenEmail, "password123");
+
+        assertError(send(HttpMethod.POST, "/api/admin/users", adminToken, new JsonObject()
+                        .put("name", "Ravi").put("email", uniqueEmail()).put("password", "password123").put("role", "TENANT")),
+                400, "BAD_REQUEST", "role must be ADMIN or MANAGER");
+        assertError(send(HttpMethod.POST, "/api/admin/users", adminToken, new JsonObject()
+                        .put("name", "Ravi").put("email", uniqueEmail()).put("password", "short").put("role", "MANAGER")),
+                400, "BAD_REQUEST", "password must be at least 8 characters");
+        assertError(send(HttpMethod.POST, "/api/admin/users", adminToken, new JsonObject()
+                        .put("name", "Ravi").put("email", takenEmail).put("password", "password123").put("role", "MANAGER")),
+                409, "CONFLICT", "Email already exists");
+    }
+
     // ---------- existing behaviour ----------
 
     @Test
