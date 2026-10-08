@@ -5,6 +5,7 @@ import com.pgmanager.config.Database;
 import com.pgmanager.config.JsonConfig;
 import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.BedController;
+import com.pgmanager.controller.DashboardController;
 import com.pgmanager.controller.HealthController;
 import com.pgmanager.controller.MaintenanceController;
 import com.pgmanager.controller.OccupancyController;
@@ -16,6 +17,7 @@ import com.pgmanager.controller.UserController;
 import com.pgmanager.exception.GlobalErrorHandler;
 import com.pgmanager.model.Role;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.DashboardRepository;
 import com.pgmanager.repository.MaintenanceRepository;
 import com.pgmanager.repository.PaymentRepository;
 import com.pgmanager.repository.PropertyRepository;
@@ -29,6 +31,7 @@ import com.pgmanager.security.PasswordHasher;
 import com.pgmanager.security.RoleHandler;
 import com.pgmanager.service.AuthService;
 import com.pgmanager.service.BedService;
+import com.pgmanager.service.DashboardService;
 import com.pgmanager.service.MaintenanceService;
 import com.pgmanager.service.OccupancyService;
 import com.pgmanager.service.PaymentService;
@@ -98,6 +101,7 @@ public class MainVerticle extends VerticleBase {
         TenantBedHistoryRepository historyRepository = new TenantBedHistoryRepository();
         PaymentRepository paymentRepository = new PaymentRepository(pool);
         MaintenanceRepository maintenanceRepository = new MaintenanceRepository(pool);
+        DashboardRepository dashboardRepository = new DashboardRepository(pool);
         PropertyService propertyService = new PropertyService(propertyRepository);
         RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
         BedService bedService = new BedService(pool, roomRepository, bedRepository, historyRepository);
@@ -105,6 +109,7 @@ public class MainVerticle extends VerticleBase {
         OccupancyService occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository);
         PaymentService paymentService = new PaymentService(paymentRepository, tenantRepository);
         MaintenanceService maintenanceService = new MaintenanceService(maintenanceRepository, tenantRepository, userRepository);
+        DashboardService dashboardService = new DashboardService(dashboardRepository);
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
@@ -116,6 +121,7 @@ public class MainVerticle extends VerticleBase {
         OccupancyController occupancyController = new OccupancyController(occupancyService);
         PaymentController paymentController = new PaymentController(paymentService);
         MaintenanceController maintenanceController = new MaintenanceController(maintenanceService);
+        DashboardController dashboardController = new DashboardController(dashboardService);
         JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
         Handler<RoutingContext> staffOnly = RoleHandler.requireRole(Role.ADMIN, Role.MANAGER);
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
@@ -143,9 +149,10 @@ public class MainVerticle extends VerticleBase {
         // ends the request, so the guard never runs for it. MaintenanceService checks that it is their own history.
         router.get("/api/tenants/:tenantId/maintenance").handler(jwtAuth).handler(maintenanceController::tenantHistory);
 
-        // Property/room/bed/tenant/payment management: protect each whole path prefix once, so every endpoint
-        // under it (including ones added later) requires a valid JWT and an ADMIN or MANAGER role
-        for (String protectedPath : List.of("/api/properties*", "/api/rooms*", "/api/beds*", "/api/tenants*", "/api/payments*")) {
+        // Property/room/bed/tenant/payment management and the dashboard: protect each whole path prefix once, so
+        // every endpoint under it (including ones added later) requires a valid JWT and an ADMIN or MANAGER role
+        for (String protectedPath : List.of("/api/properties*", "/api/rooms*", "/api/beds*", "/api/tenants*", "/api/payments*",
+                "/api/dashboard*")) {
             router.route(protectedPath).handler(jwtAuth).handler(staffOnly);
         }
 
@@ -195,6 +202,8 @@ public class MainVerticle extends VerticleBase {
         router.put("/api/maintenance/:id").handler(maintenanceController::update);
         router.patch("/api/maintenance/:id/assign").handler(staffOnly).handler(maintenanceController::assign);
         router.patch("/api/maintenance/:id/status").handler(staffOnly).handler(maintenanceController::changeStatus);
+
+        router.get("/api/dashboard").handler(dashboardController::get);
 
         // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
         router.route().failureHandler(errorHandler);
