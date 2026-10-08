@@ -1,5 +1,7 @@
 package com.pgmanager.repository;
 
+import com.pgmanager.exception.ConflictException;
+import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Bed;
 import com.pgmanager.model.BedStatus;
 import io.vertx.core.Future;
@@ -26,7 +28,8 @@ public class BedRepository {
     public Future<Bed> create(UUID roomId, String bedNumber) {
         return pool.preparedQuery("INSERT INTO beds (room_id, bed_number) VALUES ($1, $2) RETURNING " + COLUMNS)
                 .execute(Tuple.of(roomId, bedNumber))
-                .map(rows -> toBed(rows.iterator().next()));
+                .map(rows -> toBed(rows.iterator().next()))
+                .recover(err -> Future.failedFuture(translateWriteError(err)));
     }
 
     public Future<List<Bed>> findByRoomId(UUID roomId) {
@@ -41,11 +44,18 @@ public class BedRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(BedRepository::toBed));
     }
 
+    public Future<Integer> countByRoomId(UUID roomId) {
+        return pool.preparedQuery("SELECT COUNT(*) AS bed_count FROM beds WHERE room_id = $1")
+                .execute(Tuple.of(roomId))
+                .map(rows -> rows.iterator().next().getInteger("bed_count"));
+    }
+
     /** Returns the updated bed, or empty if no bed has this id. */
     public Future<Optional<Bed>> updateBedNumber(UUID id, String bedNumber) {
         return pool.preparedQuery("UPDATE beds SET bed_number = $2 WHERE id = $1 RETURNING " + COLUMNS)
                 .execute(Tuple.of(id, bedNumber))
-                .map(rows -> DbUtils.firstRow(rows).map(BedRepository::toBed));
+                .map(rows -> DbUtils.firstRow(rows).map(BedRepository::toBed))
+                .recover(err -> Future.failedFuture(translateWriteError(err)));
     }
 
     /** Returns the updated bed, or empty if no bed has this id. */
@@ -55,11 +65,24 @@ public class BedRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(BedRepository::toBed));
     }
 
-    /** Returns false if no bed has this id. */
+    /** Returns false if no bed has this id. Fails with 409 if occupancy history references it. */
     public Future<Boolean> delete(UUID id) {
         return pool.preparedQuery("DELETE FROM beds WHERE id = $1")
                 .execute(Tuple.of(id))
-                .map(rows -> rows.rowCount() > 0);
+                .map(rows -> rows.rowCount() > 0)
+                .recover(err -> Future.failedFuture(DbUtils.isForeignKeyViolation(err)
+                        ? new ConflictException("Bed cannot be deleted because it has occupancy history")
+                        : err));
+    }
+
+    private static Throwable translateWriteError(Throwable err) {
+        if (DbUtils.isUniqueViolation(err)) {
+            return new ConflictException("Bed number already exists in this room");
+        }
+        if (DbUtils.isForeignKeyViolation(err)) {
+            return new NotFoundException("Room not found");
+        }
+        return err;
     }
 
     private static Bed toBed(Row row) {

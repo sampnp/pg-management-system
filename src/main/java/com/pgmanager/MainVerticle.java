@@ -78,7 +78,7 @@ public class MainVerticle extends VerticleBase {
         RoomRepository roomRepository = new RoomRepository(pool);
         BedRepository bedRepository = new BedRepository(pool);
         PropertyService propertyService = new PropertyService(propertyRepository);
-        RoomService roomService = new RoomService(propertyRepository, roomRepository);
+        RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
         BedService bedService = new BedService(roomRepository, bedRepository);
 
         HealthController healthController = new HealthController(pool);

@@ -1,5 +1,6 @@
 package com.pgmanager.repository;
 
+import com.pgmanager.exception.ConflictException;
 import com.pgmanager.model.Property;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
@@ -46,11 +47,14 @@ public class PropertyRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(PropertyRepository::toProperty));
     }
 
-    /** Returns false if no property has this id. */
+    /** Returns false if no property has this id. Fails with 409 if rooms or other records still reference it. */
     public Future<Boolean> delete(UUID id) {
         return pool.preparedQuery("DELETE FROM properties WHERE id = $1")
                 .execute(Tuple.of(id))
-                .map(rows -> rows.rowCount() > 0);
+                .map(rows -> rows.rowCount() > 0)
+                .recover(err -> Future.failedFuture(DbUtils.isForeignKeyViolation(err)
+                        ? new ConflictException("Property cannot be deleted while it still has rooms or other related records")
+                        : err));
     }
 
     private static Property toProperty(Row row) {

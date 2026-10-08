@@ -3,6 +3,7 @@ package com.pgmanager.service;
 import com.pgmanager.dto.BedRequest;
 import com.pgmanager.dto.BedStatusRequest;
 import com.pgmanager.exception.BadRequestException;
+import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Bed;
 import com.pgmanager.model.BedStatus;
@@ -32,7 +33,15 @@ public class BedService {
         return Future.succeededFuture(request)
                 .map(BedService::validate)
                 .compose(valid -> requireRoom(roomId)
-                        .compose(room -> bedRepository.create(roomId, valid.bedNumber())));
+                        .compose(room -> bedRepository.countByRoomId(roomId)
+                                .compose(bedCount -> {
+                                    // A room's capacity is the maximum number of beds it can hold
+                                    if (bedCount >= room.capacity()) {
+                                        return Future.failedFuture(new ConflictException(
+                                                "Room is full: it already has " + bedCount + " of " + room.capacity() + " beds"));
+                                    }
+                                    return bedRepository.create(roomId, valid.bedNumber());
+                                })));
     }
 
     public Future<List<Bed>> listByRoom(UUID roomId) {
@@ -61,7 +70,13 @@ public class BedService {
     }
 
     public Future<Void> delete(UUID id) {
-        return bedRepository.delete(id)
+        return findById(id)
+                .compose(bed -> {
+                    if (bed.status() == BedStatus.OCCUPIED) {
+                        return Future.failedFuture(new ConflictException("Cannot delete an occupied bed"));
+                    }
+                    return bedRepository.delete(id);
+                })
                 .map(deleted -> {
                     if (!deleted) {
                         throw new NotFoundException(BED_NOT_FOUND);

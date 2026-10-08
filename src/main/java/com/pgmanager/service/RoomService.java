@@ -2,9 +2,11 @@ package com.pgmanager.service;
 
 import com.pgmanager.dto.RoomRequest;
 import com.pgmanager.exception.BadRequestException;
+import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Property;
 import com.pgmanager.model.Room;
+import com.pgmanager.repository.BedRepository;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
 import io.vertx.core.Future;
@@ -20,10 +22,12 @@ public class RoomService {
 
     private final PropertyRepository propertyRepository;
     private final RoomRepository roomRepository;
+    private final BedRepository bedRepository;
 
-    public RoomService(PropertyRepository propertyRepository, RoomRepository roomRepository) {
+    public RoomService(PropertyRepository propertyRepository, RoomRepository roomRepository, BedRepository bedRepository) {
         this.propertyRepository = propertyRepository;
         this.roomRepository = roomRepository;
+        this.bedRepository = bedRepository;
     }
 
     public Future<Room> create(UUID propertyId, RoomRequest request) {
@@ -47,7 +51,15 @@ public class RoomService {
     public Future<Room> update(UUID id, RoomRequest request) {
         return Future.succeededFuture(request)
                 .map(RoomService::validate)
-                .compose(valid -> roomRepository.update(id, valid.roomNumber(), valid.capacity()))
+                .compose(valid -> findById(id)
+                        .compose(room -> bedRepository.countByRoomId(id))
+                        .compose(bedCount -> {
+                            if (valid.capacity() < bedCount) {
+                                return Future.failedFuture(new ConflictException(
+                                        "Capacity cannot be less than the number of beds in the room (" + bedCount + ")"));
+                            }
+                            return roomRepository.update(id, valid.roomNumber(), valid.capacity());
+                        }))
                 .map(updated -> updated.orElseThrow(() -> new NotFoundException(ROOM_NOT_FOUND)));
     }
 

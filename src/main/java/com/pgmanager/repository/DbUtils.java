@@ -1,5 +1,6 @@
 package com.pgmanager.repository;
 
+import io.vertx.pgclient.PgException;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 
@@ -10,6 +11,10 @@ import java.util.function.Function;
 
 /** Small helpers shared by the repositories. */
 final class DbUtils {
+
+    // PostgreSQL error codes: https://www.postgresql.org/docs/current/errcodes-appendix.html
+    private static final String UNIQUE_VIOLATION = "23505";
+    private static final String FOREIGN_KEY_VIOLATION = "23503";
 
     private DbUtils() {
     }
@@ -25,5 +30,19 @@ final class DbUtils {
             result.add(mapper.apply(row));
         }
         return result;
+    }
+
+    /** A UNIQUE constraint was violated, e.g. a duplicate email or room number. */
+    static boolean isUniqueViolation(Throwable err) {
+        return hasSqlState(err, UNIQUE_VIOLATION);
+    }
+
+    /** A FOREIGN KEY was violated: the parent row does not exist, or a child row still references it. */
+    static boolean isForeignKeyViolation(Throwable err) {
+        return hasSqlState(err, FOREIGN_KEY_VIOLATION);
+    }
+
+    private static boolean hasSqlState(Throwable err, String sqlState) {
+        return err instanceof PgException pgException && sqlState.equals(pgException.getSqlState());
     }
 }
