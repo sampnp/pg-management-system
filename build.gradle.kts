@@ -52,7 +52,6 @@ dependencies {
     mockitoAgent("org.mockito:mockito-core:$mockitoVersion") { isTransitive = false }
     testImplementation("io.vertx:vertx-web-client")
     testImplementation("org.testcontainers:testcontainers-postgresql:$testcontainersVersion")
-    testImplementation("org.testcontainers:testcontainers-junit-jupiter:$testcontainersVersion")
 }
 
 tasks.test {
