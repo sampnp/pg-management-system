@@ -42,6 +42,11 @@ final class DbUtils {
         return hasSqlState(err, FOREIGN_KEY_VIOLATION);
     }
 
+    /** Name of the constraint or unique index that was violated, or null. Useful when a table has several. */
+    static String violatedConstraint(Throwable err) {
+        return err instanceof PgException pgException ? pgException.getConstraint() : null;
+    }
+
     private static boolean hasSqlState(Throwable err, String sqlState) {
         return err instanceof PgException pgException && sqlState.equals(pgException.getSqlState());
     }

@@ -7,12 +7,14 @@ import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.BedController;
 import com.pgmanager.controller.HealthController;
 import com.pgmanager.controller.OccupancyController;
+import com.pgmanager.controller.PaymentController;
 import com.pgmanager.controller.PropertyController;
 import com.pgmanager.controller.RoomController;
 import com.pgmanager.controller.TenantController;
 import com.pgmanager.exception.GlobalErrorHandler;
 import com.pgmanager.model.Role;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.PaymentRepository;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
 import com.pgmanager.repository.TenantBedHistoryRepository;
@@ -25,6 +27,7 @@ import com.pgmanager.security.RoleHandler;
 import com.pgmanager.service.AuthService;
 import com.pgmanager.service.BedService;
 import com.pgmanager.service.OccupancyService;
+import com.pgmanager.service.PaymentService;
 import com.pgmanager.service.PropertyService;
 import com.pgmanager.service.RoomService;
 import com.pgmanager.service.TenantService;
@@ -87,11 +90,13 @@ public class MainVerticle extends VerticleBase {
         BedRepository bedRepository = new BedRepository(pool);
         TenantRepository tenantRepository = new TenantRepository(pool);
         TenantBedHistoryRepository historyRepository = new TenantBedHistoryRepository();
+        PaymentRepository paymentRepository = new PaymentRepository(pool);
         PropertyService propertyService = new PropertyService(propertyRepository);
         RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
         BedService bedService = new BedService(pool, roomRepository, bedRepository, historyRepository);
         TenantService tenantService = new TenantService(tenantRepository);
         OccupancyService occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository);
+        PaymentService paymentService = new PaymentService(paymentRepository, tenantRepository);
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);
@@ -100,6 +105,7 @@ public class MainVerticle extends VerticleBase {
         BedController bedController = new BedController(bedService);
         TenantController tenantController = new TenantController(tenantService);
         OccupancyController occupancyController = new OccupancyController(occupancyService);
+        PaymentController paymentController = new PaymentController(paymentService);
         JwtAuthHandler jwtAuth = new JwtAuthHandler(jwtService);
         Handler<RoutingContext> staffOnly = RoleHandler.requireRole(Role.ADMIN, Role.MANAGER);
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
@@ -121,9 +127,9 @@ public class MainVerticle extends VerticleBase {
                 .handler(RoleHandler.requireRole(Role.ADMIN))
                 .handler(ctx -> ctx.json(new JsonObject().put("message", "Admin access granted")));
 
-        // Property/room/bed/tenant management: protect each whole path prefix once, so every endpoint
+        // Property/room/bed/tenant/payment management: protect each whole path prefix once, so every endpoint
         // under it (including ones added later) requires a valid JWT and an ADMIN or MANAGER role
-        for (String protectedPath : List.of("/api/properties*", "/api/rooms*", "/api/beds*", "/api/tenants*")) {
+        for (String protectedPath : List.of("/api/properties*", "/api/rooms*", "/api/beds*", "/api/tenants*", "/api/payments*")) {
             router.route(protectedPath).handler(jwtAuth).handler(staffOnly);
         }
 
@@ -156,6 +162,12 @@ public class MainVerticle extends VerticleBase {
         router.post("/api/tenants/:tenantId/check-out").handler(occupancyController::checkOut);
         router.get("/api/tenants/:tenantId/bed").handler(occupancyController::currentBed);
         router.get("/api/tenants/:tenantId/history").handler(occupancyController::history);
+
+        router.post("/api/payments").handler(paymentController::create);
+        router.get("/api/payments").handler(paymentController::list);
+        router.get("/api/payments/:id").handler(paymentController::get);
+        router.put("/api/payments/:id").handler(paymentController::update);
+        router.get("/api/tenants/:tenantId/payments").handler(paymentController::tenantHistory);
 
         // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
         router.route().failureHandler(errorHandler);
