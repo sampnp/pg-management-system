@@ -33,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -93,8 +94,8 @@ class DashboardServiceTest {
 
         assertSame(summary, result);
         verify(dashboardRepository).loadSummary();
-        // SET dashboard:summary <json> EX 60
-        verify(redis).set(List.of(KEY, Json.encode(summary), "EX", "60"));
+        // SET dashboard:summary <json> EX 60 NX - only if no write cleared the key meanwhile
+        verify(redis).set(List.of(KEY, Json.encode(summary), "EX", "60", "NX"));
     }
 
     @Test
@@ -117,7 +118,7 @@ class DashboardServiceTest {
 
         await(dashboardService.getSummary());
 
-        verify(redis).set(List.of(KEY, Json.encode(summary), "EX", "15"));
+        verify(redis).set(List.of(KEY, Json.encode(summary), "EX", "15", "NX"));
     }
 
     @Test
@@ -127,6 +128,8 @@ class DashboardServiceTest {
 
         assertSame(summary, await(dashboardService.getSummary()));
         verify(dashboardRepository).loadSummary();
+        // Redis is not usable, so there is no point trying to write to it
+        verify(redis, never()).set(anyList());
     }
 
     @Test
@@ -173,38 +176,64 @@ class DashboardServiceTest {
     }
 
     @Test
-    void invalidateDeletesTheDashboardKey() throws Exception {
-        when(redis.del(anyList())).thenReturn(Future.succeededFuture());
+    void invalidateMarksTheKeyClearedForAFewSeconds() throws Exception {
+        when(redis.set(anyList())).thenReturn(Future.succeededFuture());
 
         await(dashboardCache.invalidate(Set.of()));
 
-        verify(redis).del(List.of(KEY));
+        verify(redis).set(List.of(KEY, "cleared", "EX", "5"));
+    }
+
+    @Test
+    void justClearedDashboardIsRecalculatedButNotCached() throws Exception {
+        // A request that started before a write may hold older numbers; while the key says "cleared",
+        // nobody caches, so those older numbers can't get back into the cache
+        cached("cleared");
+
+        assertSame(summary, await(dashboardService.getSummary()));
+        verify(dashboardRepository).loadSummary();
+        verify(redis, never()).set(anyList());
+    }
+
+    @Test
+    void refusedSetNxStillReturnsTheFreshNumbers() throws Exception {
+        cacheIsEmpty();
+        // SET ... NX answers null when the key was filled (e.g. cleared by a write) in the meantime
+        when(redis.set(anyList())).thenReturn(Future.succeededFuture(null));
+
+        assertSame(summary, await(dashboardService.getSummary()));
     }
 
     @Test
     void invalidateNeverFailsEvenWhenRedisIsDown() throws Exception {
-        when(redis.del(anyList())).thenReturn(Future.failedFuture(new ConnectException("Connection refused")));
+        when(redis.set(anyList())).thenReturn(Future.failedFuture(new ConnectException("Connection refused")));
 
         // Completes normally: the write that triggered it must still succeed
         await(dashboardCache.invalidate(Set.of()));
 
-        verify(redis).del(List.of(KEY));
+        verify(redis).set(List.of(KEY, "cleared", "EX", "5"));
     }
 
     @Test
-    void invalidationMakesTheNextRequestRecalculate() throws Exception {
-        // 1st request: cached; then a write invalidates; 2nd request: cache empty again -> PostgreSQL
-        cached(Json.encode(summary));
-        await(dashboardService.getSummary());
-        verify(dashboardRepository, never()).loadSummary();
-
-        when(redis.del(anyList())).thenReturn(Future.succeededFuture());
+    void failedClearIsRepeatedBeforeTheCacheIsUsedAgain() throws Exception {
+        List<String> clear = List.of(KEY, "cleared", "EX", "5");
+        when(redis.set(anyList())).thenReturn(Future.failedFuture(new ConnectException("Connection refused")));
         await(dashboardCache.invalidate(Set.of()));
-        cacheIsEmpty();
-        when(redis.set(anyList())).thenReturn(Future.succeededFuture());
 
+        // Still failing: the (possibly old) cached value is not even read
+        assertSame(summary, await(dashboardService.getSummary()));
+        verify(redis, never()).get(any());
+
+        // Redis is back: the clear is repeated first, then the cache is used as normal
+        when(redis.set(anyList())).thenReturn(Future.succeededFuture());
+        cacheIsEmpty();
+        assertSame(summary, await(dashboardService.getSummary()));
+        verify(redis, times(3)).set(clear);
+        verify(redis).get(KEY);
+
+        // Done: no more repeats
         await(dashboardService.getSummary());
-        verify(dashboardRepository).loadSummary();
+        verify(redis, times(3)).set(clear);
     }
 
     // ---------- property dashboard ----------
@@ -219,7 +248,7 @@ class DashboardServiceTest {
         when(dashboardRepository.loadPropertySummary(propertyId)).thenReturn(Future.succeededFuture(Optional.of(property)));
 
         assertEquals(property, await(dashboardService.getPropertySummary(propertyId)));
-        verify(redis).set(List.of(key, Json.encode(property), "EX", "60"));
+        verify(redis).set(List.of(key, Json.encode(property), "EX", "60", "NX"));
 
         // Next request: served from that key
         Response response = mock(Response.class);
@@ -258,11 +287,13 @@ class DashboardServiceTest {
     @Test
     void invalidateClearsThePgWideKeyAndOnlyTheChangedProperties() throws Exception {
         UUID changed = UUID.randomUUID();
-        when(redis.del(anyList())).thenReturn(Future.succeededFuture());
+        when(redis.set(anyList())).thenReturn(Future.succeededFuture());
 
         await(dashboardCache.invalidate(Set.of(changed)));
 
-        verify(redis).del(List.of(KEY, "dashboard:property:" + changed));
+        verify(redis).set(List.of(KEY, "cleared", "EX", "5"));
+        verify(redis).set(List.of("dashboard:property:" + changed, "cleared", "EX", "5"));
+        verify(redis, times(2)).set(anyList());
     }
 
     private static PropertyDashboard propertyDashboard(UUID propertyId) {

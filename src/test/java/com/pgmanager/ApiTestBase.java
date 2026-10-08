@@ -14,6 +14,9 @@ import io.vertx.ext.web.client.HttpRequest;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
+import io.vertx.redis.client.Redis;
+import io.vertx.redis.client.RedisAPI;
+import io.vertx.redis.client.Response;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
 import org.junit.jupiter.api.AfterAll;
@@ -27,6 +30,7 @@ import java.util.UUID;
 
 import static com.pgmanager.TestFutures.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -46,6 +50,8 @@ abstract class ApiTestBase {
 
     protected static Vertx vertx;
     protected static WebClient client;
+    /** Direct access to the test Redis, to look at (and tamper with) cached dashboards. */
+    protected static RedisAPI redisApi;
 
     @BeforeAll
     static void startApplication() throws Exception {
@@ -56,6 +62,20 @@ abstract class ApiTestBase {
         vertx = Vertx.vertx();
         await(vertx.deployVerticle(new MainVerticle(config)));
         client = WebClient.create(vertx, new WebClientOptions().setDefaultHost("localhost").setDefaultPort(port));
+        redisApi = RedisAPI.api(Redis.createClient(vertx, redisConfig().connectionString()));
+    }
+
+    /** A write marks a dashboard key "cleared" for a few seconds (see DashboardCache) instead of deleting it. */
+    protected static void assertCleared(String key) throws Exception {
+        Response value = await(redisApi.get(key));
+        assertNotNull(value, key + " should be marked cleared");
+        assertEquals("cleared", value.toString());
+    }
+
+    protected static void assertCachedDashboard(String key) throws Exception {
+        Response value = await(redisApi.get(key));
+        assertNotNull(value, key + " should hold a cached dashboard");
+        assertTrue(new JsonObject(value.toString()).containsKey("generatedAt"), () -> key + " holds " + value);
     }
 
     /** The configuration the tests use, with the given port, database and account settings. */

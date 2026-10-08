@@ -19,8 +19,9 @@ import java.util.function.Supplier;
  * The PG-wide and the per-property dashboards for ADMIN and MANAGER users (the routes check the role).
  *
  * Cache-aside with Redis: read the cache first; on a miss, run the aggregate query in PostgreSQL and cache
- * the result. Redis is only an optimization - if it is down, or holds something unreadable, the dashboard
- * is simply calculated from PostgreSQL, so a Redis problem never turns into an error for the user.
+ * the result (see DashboardCache for how writes clear it). Redis is only an optimization - if it is down, or
+ * holds something unreadable, the dashboard is simply calculated from PostgreSQL, so a Redis problem never
+ * turns into an error for the user.
  */
 public class DashboardService {
 
@@ -45,32 +46,53 @@ public class DashboardService {
                         .map(summary -> summary.orElseThrow(() -> new NotFoundException(PropertyService.PROPERTY_NOT_FOUND))));
     }
 
-    private <T> Future<T> cached(String key, Class<T> type, Supplier<Future<T>> load) {
-        return readCache(key, type)
-                .compose(cached -> cached.isPresent()
-                        ? Future.succeededFuture(cached.get())
-                        : loadAndCache(key, load));
+    /** What to do with a freshly calculated dashboard, depending on what the cache held. */
+    private enum Store { NOTHING, IF_STILL_EMPTY, REPLACE }
+
+    /** A cached dashboard (value), or why there is none and what to store after calculating it. */
+    private record Lookup<T>(T value, Store store) {
     }
 
-    /** The cached dashboard, or empty on a miss, a Redis failure or unreadable cached JSON. */
-    private <T> Future<Optional<T>> readCache(String key, Class<T> type) {
+    private <T> Future<T> cached(String key, Class<T> type, Supplier<Future<T>> load) {
+        return lookup(key, type)
+                .compose(found -> found.value() != null
+                        ? Future.succeededFuture(found.value())
+                        : load.get().compose(fresh -> store(key, fresh, found.store()).map(fresh)));
+    }
+
+    private <T> Future<Lookup<T>> lookup(String key, Class<T> type) {
         return dashboardCache.get(key)
-                .map(json -> json.flatMap(value -> parse(value, type)))
+                .map(cached -> {
+                    if (cached.isEmpty()) {
+                        // Miss: cache the result, unless a write clears the key while we calculate (SET NX)
+                        return new Lookup<T>(null, Store.IF_STILL_EMPTY);
+                    }
+                    if (DashboardCache.CLEARED.equals(cached.get())) {
+                        // The data changed a moment ago: calculate fresh numbers, but don't cache them yet
+                        return new Lookup<T>(null, Store.NOTHING);
+                    }
+                    return parse(cached.get(), type)
+                            .map(value -> new Lookup<>(value, Store.NOTHING))
+                            .orElseGet(() -> new Lookup<>(null, Store.REPLACE));
+                })
                 .recover(err -> {
+                    // Redis is not usable right now: PostgreSQL only, without trying to write to Redis
                     log.warn("Could not read the dashboard cache, using PostgreSQL: {}", err.getMessage());
-                    return Future.succeededFuture(Optional.empty());
+                    return Future.succeededFuture(new Lookup<>(null, Store.NOTHING));
                 });
     }
 
-    private <T> Future<T> loadAndCache(String key, Supplier<Future<T>> load) {
-        return load.get()
-                .compose(summary -> dashboardCache.put(key, Json.encode(summary))
-                        .recover(err -> {
-                            // The numbers are already calculated, so still return them
-                            log.warn("Could not cache the dashboard: {}", err.getMessage());
-                            return Future.succeededFuture();
-                        })
-                        .map(summary));
+    private Future<Void> store(String key, Object dashboard, Store store) {
+        Future<Void> stored = switch (store) {
+            case NOTHING -> Future.succeededFuture();
+            case IF_STILL_EMPTY -> dashboardCache.putIfAbsent(key, Json.encode(dashboard));
+            case REPLACE -> dashboardCache.put(key, Json.encode(dashboard));
+        };
+        // The numbers are already calculated, so a failed cache write only gets logged
+        return stored.recover(err -> {
+            log.warn("Could not cache the dashboard: {}", err.getMessage());
+            return Future.succeededFuture();
+        });
     }
 
     /** Uses the project's Jackson mapper. Anything that is not a complete dashboard is treated as a cache miss. */

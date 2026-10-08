@@ -5,14 +5,13 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.HttpResponse;
-import io.vertx.redis.client.Redis;
-import io.vertx.redis.client.RedisAPI;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 
 import static com.pgmanager.TestFutures.await;
@@ -20,8 +19,6 @@ import static io.vertx.core.http.HttpMethod.GET;
 import static io.vertx.core.http.HttpMethod.PATCH;
 import static io.vertx.core.http.HttpMethod.POST;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 /** GET /api/properties/:propertyId/dashboard with a real PostgreSQL and Redis. Each test builds its own properties. */
 class PropertyDashboardApiIntegrationTest extends ApiTestBase {
@@ -31,13 +28,11 @@ class PropertyDashboardApiIntegrationTest extends ApiTestBase {
 
     private static String managerToken;
     private static String adminToken;
-    private static RedisAPI redisApi;
 
     @BeforeAll
     static void setUpClients() throws Exception {
         managerToken = registerAndLogin("MANAGER");
         adminToken = registerAndLogin("ADMIN");
-        redisApi = RedisAPI.api(Redis.createClient(vertx, redisConfig().connectionString()));
     }
 
     @Test
@@ -138,25 +133,33 @@ class PropertyDashboardApiIntegrationTest extends ApiTestBase {
         String keyA = "dashboard:property:" + propertyA;
         String keyB = "dashboard:property:" + propertyB;
 
+        String tenantInA = createTenant("Cache tenant A");
+        String tenantInB = createTenant("Cache tenant B");
+        // Creating rooms and beds marked the keys "cleared" for 5 seconds; start from empty keys instead of waiting
+        await(redisApi.del(List.of(keyA, keyB)));
+
         PropertyDashboard before = propertyDashboard(propertyA);
         propertyDashboard(propertyB);
         assertEquals(new JsonObject(Json.encode(before)), new JsonObject(await(redisApi.get(keyA)).toString()));
-        assertNotNull(await(redisApi.get(keyB)));
+        assertCachedDashboard(keyB);
 
         // A check-in in property B clears B (and the PG-wide dashboard) but leaves A's cached dashboard alone
-        String tenantInB = createTenant("Cache tenant B");
         checkIn(tenantInB, bedB);
-        assertNull(await(redisApi.get(keyB)), "B's dashboard should be cleared");
-        assertNotNull(await(redisApi.get(keyA)), "A's dashboard should be kept");
+        assertCleared(keyB);
+        assertEquals(new JsonObject(Json.encode(before)), new JsonObject(await(redisApi.get(keyA)).toString()));
         assertEquals(1, propertyDashboard(propertyB).tenants().active());
 
-        // A check-in and a payment in property A clear A, and the new numbers show up straight away
-        String tenantInA = createTenant("Cache tenant A");
+        // A check-in in property A clears A, and the new numbers show up straight away
         checkIn(tenantInA, bedA);
-        assertNull(await(redisApi.get(keyA)));
+        assertCleared(keyA);
         assertEquals(1, propertyDashboard(propertyA).beds().occupied());
+
+        // So does a payment of a tenant staying in A
+        await(redisApi.del(List.of(keyA)));
+        propertyDashboard(propertyA);
+        assertCachedDashboard(keyA);
         createPayment(tenantInA, THIS_MONTH, "6000", "PAID");
-        assertNull(await(redisApi.get(keyA)), "a payment of a tenant staying in A should clear A");
+        assertCleared(keyA);
         assertAmount("6000", propertyDashboard(propertyA).payments().paidAmount());
     }
 

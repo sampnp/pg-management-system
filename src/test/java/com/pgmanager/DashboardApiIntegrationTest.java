@@ -11,8 +11,6 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
-import io.vertx.redis.client.Redis;
-import io.vertx.redis.client.RedisAPI;
 import io.vertx.redis.client.Response;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -29,7 +27,6 @@ import static io.vertx.core.http.HttpMethod.PUT;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -43,14 +40,11 @@ class DashboardApiIntegrationTest extends ApiTestBase {
 
     private static String managerToken;
     private static String adminToken;
-    /** Direct access to the test Redis, to look at (and tamper with) the cached value. */
-    private static RedisAPI redisApi;
 
     @BeforeAll
     static void setUpClients() throws Exception {
         managerToken = registerAndLogin("MANAGER");
         adminToken = registerAndLogin("ADMIN");
-        redisApi = RedisAPI.api(Redis.createClient(vertx, redisConfig().connectionString()));
     }
 
     // ---------- access ----------
@@ -145,7 +139,7 @@ class DashboardApiIntegrationTest extends ApiTestBase {
 
         // A check-in changes the counts, so it must clear the cache...
         checkIn(tenantId, bedId);
-        assertNull(await(redisApi.get(KEY)), "check-in should clear the cached dashboard");
+        assertCleared(KEY);
 
         // ...and the next request recalculates from PostgreSQL
         DashboardSummary fresh = dashboard();
@@ -158,12 +152,14 @@ class DashboardApiIntegrationTest extends ApiTestBase {
     @Test
     void newPaymentClearsTheCacheAndShowsUpImmediately() throws Exception {
         String tenantId = createTenant("Payment Cache Tenant");
+        // Creating the tenant marked the key "cleared" for 5 seconds; start from an empty key instead of waiting
+        await(redisApi.del(List.of(KEY)));
         DashboardSummary before = dashboard();
-        assertNotNull(await(redisApi.get(KEY)));
+        assertCachedDashboard(KEY);
 
         createAndGetId("/api/payments", payment(tenantId, "6500", "PAID"));
 
-        assertNull(await(redisApi.get(KEY)), "a new payment should clear the cached dashboard");
+        assertCleared(KEY);
         DashboardSummary after = dashboard();
         assertEquals(before.payments().paidCount() + 1, after.payments().paidCount());
         assertAmount(before.payments().paidAmount().add(new BigDecimal("6500")), after.payments().paidAmount());
@@ -176,8 +172,10 @@ class DashboardApiIntegrationTest extends ApiTestBase {
         checkIn(tenantId, createBed());
         String issueId = createIssue(tenantId, "LOW");
         String managerId = send(GET, "/api/auth/me", managerToken, null).bodyAsJsonObject().getString("id");
+        // The setup writes marked the key "cleared" for 5 seconds; start from an empty key instead of waiting
+        await(redisApi.del(List.of(KEY)));
         dashboard();
-        assertNotNull(await(redisApi.get(KEY)));
+        assertCachedDashboard(KEY);
 
         assertEquals(200, send(GET, "/api/tenants", managerToken, null).statusCode());
         assertEquals(200, send(GET, "/api/maintenance", managerToken, null).statusCode());
@@ -186,7 +184,8 @@ class DashboardApiIntegrationTest extends ApiTestBase {
         assertEquals(200, send(PATCH, "/api/maintenance/" + issueId + "/assign", managerToken,
                 new JsonObject().put("assignedTo", managerId)).statusCode());
 
-        assertNotNull(await(redisApi.get(KEY)), "reads, renames and assignments should not clear the cache");
+        // Still the cached dashboard, not "cleared"
+        assertCachedDashboard(KEY);
     }
 
     @Test
@@ -236,6 +235,24 @@ class DashboardApiIntegrationTest extends ApiTestBase {
             // That copy could not clear the shared cache, so clear it here for the other tests
             await(redisApi.del(List.of(KEY)));
         }
+    }
+
+    @Test
+    void requestDuringTheClearedWindowGetsFreshNumbersWithoutCachingThem() throws Exception {
+        String tenantId = createTenant("Race Tenant");
+        await(redisApi.del(List.of(KEY)));
+
+        // A write clears the key: for 5 seconds it holds "cleared"...
+        createAndGetId("/api/payments", payment(tenantId, "1000", "PAID"));
+        assertCleared(KEY);
+
+        // ...and a dashboard request in that time returns fresh numbers without caching them. A request that had
+        // calculated older numbers before the write is refused the same way (its SET ... NX finds the key taken).
+        DashboardSummary fresh = dashboard();
+        assertCleared(KEY);
+        await(redisApi.del(List.of(KEY)));
+        assertEquals(fresh.payments().paidCount(), dashboard().payments().paidCount());
+        assertCachedDashboard(KEY);
     }
 
     // ---------- helpers ----------
