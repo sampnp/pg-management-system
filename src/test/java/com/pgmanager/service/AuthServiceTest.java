@@ -35,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -85,6 +86,29 @@ class AuthServiceTest {
         assertEquals(Role.MANAGER, user.role());
         assertNotEquals("password123", user.passwordHash());
         assertTrue(passwordHasher.matches("password123", user.passwordHash()));
+    }
+
+    @Test
+    void registrationAlwaysSavesAManagerNeverAnAdmin() throws Exception {
+        when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.empty()));
+        when(userRepository.insert(anyString(), anyString(), anyString(), any())).thenAnswer(call -> Future.succeededFuture(
+                new User(UUID.randomUUID(), call.getArgument(0), call.getArgument(1), call.getArgument(2),
+                        call.getArgument(3), Instant.now())));
+
+        await(authService.register(new RegisterRequest("Sambit", "sambit@example.com", "password123")));
+
+        verify(userRepository).insert(eq("Sambit"), eq("sambit@example.com"), anyString(), eq(Role.MANAGER));
+        verify(userRepository, never()).insert(any(), any(), any(), eq(Role.ADMIN));
+    }
+
+    @Test
+    void tokenFromLoginCarriesTheRoleStoredInTheDatabase() throws Exception {
+        User admin = new User(UUID.randomUUID(), "Admin", "admin@example.com", passwordHasher.hash("password123"), Role.ADMIN, Instant.now());
+        when(userRepository.findByEmail("admin@example.com")).thenReturn(Future.succeededFuture(Optional.of(admin)));
+
+        String token = await(authService.login(new LoginRequest("admin@example.com", "password123")));
+
+        assertEquals(Role.ADMIN, await(jwtService.verify(token)).role());
     }
 
     @Test

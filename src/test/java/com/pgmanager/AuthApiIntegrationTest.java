@@ -5,13 +5,17 @@ import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.HttpResponse;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import java.util.UUID;
 
 import static com.pgmanager.TestFutures.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-/** End-to-end tests for registration, login, JWT middleware and role checks. */
+/** End-to-end tests for registration, login, JWT middleware, role checks and admin role changes. */
 class AuthApiIntegrationTest extends ApiTestBase {
 
     // ---------- registration ----------
@@ -112,6 +116,103 @@ class AuthApiIntegrationTest extends ApiTestBase {
         assertError(response, 403, "FORBIDDEN", "Insufficient permissions");
     }
 
+    // ---------- ADMIN can only be given by an ADMIN ----------
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ADMIN", "admin", " Admin "})
+    void clientChosenAdminRoleIsIgnoredOnRegistration(String role) throws Exception {
+        String email = uniqueEmail();
+        JsonObject body = new JsonObject().put("name", "Mallory").put("email", email).put("password", "password123").put("role", role);
+
+        HttpResponse<Buffer> response = send(HttpMethod.POST, "/api/auth/register", null, body);
+
+        assertEquals(201, response.statusCode());
+        assertEquals("MANAGER", response.bodyAsJsonObject().getString("role"));
+        String token = login(email, "password123").bodyAsJsonObject().getString("token");
+        assertEquals("MANAGER", send(HttpMethod.GET, "/api/auth/me", token, null).bodyAsJsonObject().getString("role"));
+        assertError(send(HttpMethod.GET, "/api/admin/test", token, null), 403, "FORBIDDEN", "Insufficient permissions");
+    }
+
+    @Test
+    void promoteWithoutTokenReturns401() throws Exception {
+        String userId = registerUser(uniqueEmail());
+
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/role", null, adminRole()),
+                401, "UNAUTHORIZED", "Missing or invalid Authorization header");
+    }
+
+    @Test
+    void managerCannotPromoteAnotherUserOrThemselves() throws Exception {
+        String email = uniqueEmail();
+        String managerId = registerUser(email);
+        String managerToken = login(email, "password123").bodyAsJsonObject().getString("token");
+        String otherId = registerUser(uniqueEmail());
+
+        for (String userId : new String[] {otherId, managerId}) {
+            assertError(send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/role", managerToken, adminRole()),
+                    403, "FORBIDDEN", "Insufficient permissions");
+        }
+        // Still a manager after logging in again
+        String newToken = login(email, "password123").bodyAsJsonObject().getString("token");
+        assertEquals("MANAGER", send(HttpMethod.GET, "/api/auth/me", newToken, null).bodyAsJsonObject().getString("role"));
+    }
+
+    @Test
+    void adminCanPromoteManagerAndTheNewTokenCarriesTheAdminRole() throws Exception {
+        String email = uniqueEmail();
+        String userId = registerUser(email);
+        String oldToken = login(email, "password123").bodyAsJsonObject().getString("token");
+
+        HttpResponse<Buffer> response = send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/role", registerAndLogin("ADMIN"), adminRole());
+
+        assertEquals(200, response.statusCode());
+        assertEquals("ADMIN", response.bodyAsJsonObject().getString("role"));
+        assertFalse(response.bodyAsJsonObject().containsKey("passwordHash"));
+
+        String newToken = login(email, "password123").bodyAsJsonObject().getString("token");
+        assertEquals("ADMIN", send(HttpMethod.GET, "/api/auth/me", newToken, null).bodyAsJsonObject().getString("role"));
+        assertEquals(200, send(HttpMethod.GET, "/api/admin/test", newToken, null).statusCode());
+        // A JWT is not changed after it is issued: the old token keeps the old role until it expires
+        assertEquals(403, send(HttpMethod.GET, "/api/admin/test", oldToken, null).statusCode());
+    }
+
+    @Test
+    void adminCanChangeAnAdminBackToManager() throws Exception {
+        String email = uniqueEmail();
+        String userId = registerUser(email);
+        setRoleInDatabase(email, "ADMIN");
+
+        HttpResponse<Buffer> response = send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/role",
+                registerAndLogin("ADMIN"), new JsonObject().put("role", "manager"));
+
+        assertEquals(200, response.statusCode());
+        assertEquals("MANAGER", response.bodyAsJsonObject().getString("role"));
+    }
+
+    @Test
+    void adminCannotChangeTheirOwnRole() throws Exception {
+        String adminToken = registerAndLogin("ADMIN");
+        String adminId = send(HttpMethod.GET, "/api/auth/me", adminToken, null).bodyAsJsonObject().getString("id");
+
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + adminId + "/role", adminToken, new JsonObject().put("role", "MANAGER")),
+                400, "BAD_REQUEST", "You cannot change your own role");
+    }
+
+    @Test
+    void invalidRoleChangesReturn400Or404() throws Exception {
+        String adminToken = registerAndLogin("ADMIN");
+        String userId = registerUser(uniqueEmail());
+
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/role", adminToken, new JsonObject().put("role", "OWNER")),
+                400, "BAD_REQUEST", "role must be ADMIN or MANAGER");
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + userId + "/role", adminToken, new JsonObject()),
+                400, "BAD_REQUEST", "role is required");
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/not-a-uuid/role", adminToken, adminRole()),
+                400, "BAD_REQUEST", "id must be a valid UUID");
+        assertError(send(HttpMethod.PATCH, "/api/admin/users/" + UUID.randomUUID() + "/role", adminToken, adminRole()),
+                404, "NOT_FOUND", "User not found");
+    }
+
     // ---------- existing behaviour ----------
 
     @Test
@@ -125,5 +226,15 @@ class AuthApiIntegrationTest extends ApiTestBase {
     @Test
     void unknownRouteReturnsJson404() throws Exception {
         assertError(send(HttpMethod.GET, "/api/does-not-exist", null, null), 404, "NOT_FOUND", "Resource not found");
+    }
+
+    private static String registerUser(String email) throws Exception {
+        HttpResponse<Buffer> response = register("Test User", email, "password123");
+        assertEquals(201, response.statusCode());
+        return response.bodyAsJsonObject().getString("id");
+    }
+
+    private static JsonObject adminRole() {
+        return new JsonObject().put("role", "ADMIN");
     }
 }
