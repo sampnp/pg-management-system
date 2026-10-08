@@ -4,7 +4,7 @@ package com.pgmanager.config;
  * Application configuration, read once at startup from environment variables.
  * Secrets (passwords, JWT key) are never hard-coded; missing required values fail fast.
  */
-public record AppConfig(int httpPort, DatabaseConfig database, JwtConfig jwt) {
+public record AppConfig(int httpPort, DatabaseConfig database, JwtConfig jwt, RedisConfig redis) {
 
     public static AppConfig fromEnv() {
         DatabaseConfig database = new DatabaseConfig(
@@ -18,7 +18,12 @@ public record AppConfig(int httpPort, DatabaseConfig database, JwtConfig jwt) {
                 requiredEnv("JWT_SECRET"),
                 intEnv("JWT_EXPIRATION_SECONDS", 3600));
 
-        return new AppConfig(intEnv("HTTP_PORT", 8080), database, jwt);
+        RedisConfig redis = new RedisConfig(
+                env("REDIS_HOST", "localhost"),
+                intEnv("REDIS_PORT", 6379),
+                intEnv("DASHBOARD_CACHE_TTL_SECONDS", 60));
+
+        return new AppConfig(intEnv("HTTP_PORT", 8080), database, jwt, redis);
     }
 
     private static String env(String key, String defaultValue) {

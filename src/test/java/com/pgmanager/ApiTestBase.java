@@ -4,6 +4,7 @@ import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.Database;
 import com.pgmanager.config.DatabaseConfig;
 import com.pgmanager.config.JwtConfig;
+import com.pgmanager.config.RedisConfig;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
@@ -16,6 +17,7 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.io.IOException;
@@ -28,15 +30,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Base class for end-to-end HTTP tests: the real MainVerticle (router, JWT middleware, services,
- * Flyway migrations) against a throwaway PostgreSQL started by Testcontainers. Requires Docker.
+ * Flyway migrations) against a throwaway PostgreSQL and Redis started by Testcontainers. Requires Docker.
  */
 abstract class ApiTestBase {
 
-    // One container shared by all test classes (started once; Testcontainers removes it when the JVM exits)
+    // One container of each shared by all test classes (started once; Testcontainers removes them when the JVM exits)
     static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17-alpine");
+    static final GenericContainer<?> redis = new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
 
     static {
         postgres.start();
+        redis.start();
     }
 
     protected static Vertx vertx;
@@ -48,7 +52,8 @@ abstract class ApiTestBase {
         AppConfig config = new AppConfig(
                 port,
                 databaseConfig(),
-                new JwtConfig("integration-test-secret-at-least-32-chars", 3600));
+                new JwtConfig("integration-test-secret-at-least-32-chars", 3600),
+                redisConfig());
 
         vertx = Vertx.vertx();
         await(vertx.deployVerticle(new MainVerticle(config)));
@@ -64,6 +69,11 @@ abstract class ApiTestBase {
     protected static DatabaseConfig databaseConfig() {
         return new DatabaseConfig(postgres.getHost(), postgres.getMappedPort(5432), postgres.getDatabaseName(),
                 postgres.getUsername(), postgres.getPassword());
+    }
+
+    /** The test Redis, with the same 60 second dashboard TTL as the default configuration. */
+    protected static RedisConfig redisConfig() {
+        return new RedisConfig(redis.getHost(), redis.getMappedPort(6379), 60);
     }
 
     /** Sends a request with an optional Bearer token and optional JSON body. */

@@ -7,6 +7,7 @@ import com.pgmanager.model.Payment;
 import com.pgmanager.model.PaymentMethod;
 import com.pgmanager.model.PaymentStatus;
 import com.pgmanager.model.Tenant;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PaymentRepository;
 import com.pgmanager.repository.TenantRepository;
 import io.vertx.core.Future;
@@ -31,10 +32,12 @@ public class PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final TenantRepository tenantRepository;
+    private final DashboardCache dashboardCache;
 
-    public PaymentService(PaymentRepository paymentRepository, TenantRepository tenantRepository) {
+    public PaymentService(PaymentRepository paymentRepository, TenantRepository tenantRepository, DashboardCache dashboardCache) {
         this.paymentRepository = paymentRepository;
         this.tenantRepository = tenantRepository;
+        this.dashboardCache = dashboardCache;
     }
 
     public Future<Payment> create(PaymentRequest request) {
@@ -42,7 +45,8 @@ public class PaymentService {
                 .map(r -> validate(r, true))
                 .compose(valid -> requireTenant(valid.tenantId())
                         .compose(tenant -> paymentRepository.create(valid.tenantId(), valid.amount(), valid.rentMonth(),
-                                valid.paymentDate(), valid.paymentMethod(), valid.status(), valid.receiptId())));
+                                valid.paymentDate(), valid.paymentMethod(), valid.status(), valid.receiptId())))
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     public Future<Payment> findById(UUID id) {
@@ -72,7 +76,9 @@ public class PaymentService {
                             return paymentRepository.update(id, valid.amount(), valid.rentMonth(), valid.paymentDate(),
                                     valid.paymentMethod(), valid.status(), valid.receiptId());
                         }))
-                .map(updated -> updated.orElseThrow(() -> new NotFoundException(PAYMENT_NOT_FOUND)));
+                .map(updated -> updated.orElseThrow(() -> new NotFoundException(PAYMENT_NOT_FOUND)))
+                // Amount and status can change, so the payment totals can too
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     /** A tenant's payments, newest rent month first. 404 for an unknown tenant; empty list if they have none. */

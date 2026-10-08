@@ -6,6 +6,7 @@ import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Tenant;
 import com.pgmanager.model.TenantStatus;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.TenantRepository;
 import io.vertx.core.Future;
 
@@ -26,16 +27,19 @@ public class TenantService {
     private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
 
     private final TenantRepository tenantRepository;
+    private final DashboardCache dashboardCache;
 
-    public TenantService(TenantRepository tenantRepository) {
+    public TenantService(TenantRepository tenantRepository, DashboardCache dashboardCache) {
         this.tenantRepository = tenantRepository;
+        this.dashboardCache = dashboardCache;
     }
 
     public Future<Tenant> create(TenantRequest request) {
         return Future.succeededFuture(request)
                 .map(TenantService::validate)
                 .compose(valid -> tenantRepository.create(valid.name(), valid.phone(), valid.email(),
-                        valid.joiningDate(), valid.monthlyRent(), valid.securityDeposit()));
+                        valid.joiningDate(), valid.monthlyRent(), valid.securityDeposit()))
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     public Future<List<Tenant>> findAll() {
@@ -74,7 +78,8 @@ public class TenantService {
                         throw new NotFoundException(TENANT_NOT_FOUND);
                     }
                     return null;
-                });
+                })
+                .compose(v -> dashboardCache.invalidate());
     }
 
     /** Validated and normalized tenant fields. */

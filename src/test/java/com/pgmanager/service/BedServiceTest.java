@@ -11,6 +11,7 @@ import com.pgmanager.model.BedStatus;
 import com.pgmanager.model.Occupancy;
 import com.pgmanager.model.Room;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.RoomRepository;
 import com.pgmanager.repository.TenantBedHistoryRepository;
 import io.vertx.core.Future;
@@ -49,6 +50,8 @@ class BedServiceTest {
     private TenantBedHistoryRepository historyRepository;
     private BedService bedService;
 
+    private DashboardCache dashboardCache;
+
     @BeforeEach
     void setUp() {
         Pool pool = mock(Pool.class);
@@ -56,7 +59,9 @@ class BedServiceTest {
         roomRepository = mock(RoomRepository.class);
         bedRepository = mock(BedRepository.class);
         historyRepository = mock(TenantBedHistoryRepository.class);
-        bedService = new BedService(pool, roomRepository, bedRepository, historyRepository);
+        dashboardCache = mock(DashboardCache.class);
+        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        bedService = new BedService(pool, roomRepository, bedRepository, historyRepository, dashboardCache);
     }
 
     @Test

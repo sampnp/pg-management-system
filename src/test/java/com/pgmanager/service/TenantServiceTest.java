@@ -6,6 +6,7 @@ import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Tenant;
 import com.pgmanager.model.TenantStatus;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.TenantRepository;
 import io.vertx.core.Future;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,10 +42,14 @@ class TenantServiceTest {
     private TenantRepository tenantRepository;
     private TenantService tenantService;
 
+    private DashboardCache dashboardCache;
+
     @BeforeEach
     void setUp() {
         tenantRepository = mock(TenantRepository.class);
-        tenantService = new TenantService(tenantRepository);
+        dashboardCache = mock(DashboardCache.class);
+        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        tenantService = new TenantService(tenantRepository, dashboardCache);
     }
 
     @Test

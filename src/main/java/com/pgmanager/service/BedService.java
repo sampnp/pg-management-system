@@ -9,6 +9,7 @@ import com.pgmanager.model.Bed;
 import com.pgmanager.model.BedStatus;
 import com.pgmanager.model.Room;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.RoomRepository;
 import com.pgmanager.repository.TenantBedHistoryRepository;
 import io.vertx.core.Future;
@@ -27,13 +28,15 @@ public class BedService {
     private final RoomRepository roomRepository;
     private final BedRepository bedRepository;
     private final TenantBedHistoryRepository historyRepository;
+    private final DashboardCache dashboardCache;
 
     public BedService(Pool pool, RoomRepository roomRepository, BedRepository bedRepository,
-                      TenantBedHistoryRepository historyRepository) {
+                      TenantBedHistoryRepository historyRepository, DashboardCache dashboardCache) {
         this.pool = pool;
         this.roomRepository = roomRepository;
         this.bedRepository = bedRepository;
         this.historyRepository = historyRepository;
+        this.dashboardCache = dashboardCache;
     }
 
     public Future<Bed> create(UUID roomId, BedRequest request) {
@@ -48,7 +51,8 @@ public class BedService {
                                                 "Room is full: it already has " + bedCount + " of " + room.capacity() + " beds"));
                                     }
                                     return bedRepository.create(roomId, valid.bedNumber());
-                                })));
+                                })))
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     public Future<List<Bed>> listByRoom(UUID roomId) {
@@ -91,7 +95,9 @@ public class BedService {
                             }
                             return bedRepository.updateStatus(tx, id, requested);
                         })
-                        .map(updated -> updated.orElseThrow(() -> new NotFoundException(BED_NOT_FOUND)))));
+                        .map(updated -> updated.orElseThrow(() -> new NotFoundException(BED_NOT_FOUND)))))
+                // After the transaction has committed, so the next dashboard request sees the new status
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     public Future<Void> delete(UUID id) {
@@ -107,7 +113,8 @@ public class BedService {
                         throw new NotFoundException(BED_NOT_FOUND);
                     }
                     return null;
-                });
+                })
+                .compose(v -> dashboardCache.invalidate());
     }
 
     private Future<Room> requireRoom(UUID roomId) {

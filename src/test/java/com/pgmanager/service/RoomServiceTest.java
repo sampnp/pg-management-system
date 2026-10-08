@@ -7,6 +7,7 @@ import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Property;
 import com.pgmanager.model.Room;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
 import io.vertx.core.Future;
@@ -44,12 +45,16 @@ class RoomServiceTest {
     private BedRepository bedRepository;
     private RoomService roomService;
 
+    private DashboardCache dashboardCache;
+
     @BeforeEach
     void setUp() {
         propertyRepository = mock(PropertyRepository.class);
         roomRepository = mock(RoomRepository.class);
         bedRepository = mock(BedRepository.class);
-        roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
+        dashboardCache = mock(DashboardCache.class);
+        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        roomService = new RoomService(propertyRepository, roomRepository, bedRepository, dashboardCache);
     }
 
     @Test

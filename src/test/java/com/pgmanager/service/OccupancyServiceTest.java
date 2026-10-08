@@ -11,6 +11,7 @@ import com.pgmanager.model.Occupancy;
 import com.pgmanager.model.Tenant;
 import com.pgmanager.model.TenantStatus;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.TenantBedHistoryRepository;
 import com.pgmanager.repository.TenantRepository;
 import io.vertx.core.Future;
@@ -52,6 +53,8 @@ class OccupancyServiceTest {
     private TenantBedHistoryRepository historyRepository;
     private OccupancyService occupancyService;
 
+    private DashboardCache dashboardCache;
+
     @BeforeEach
     void setUp() {
         pool = mock(Pool.class);
@@ -59,7 +62,9 @@ class OccupancyServiceTest {
         tenantRepository = mock(TenantRepository.class);
         bedRepository = mock(BedRepository.class);
         historyRepository = mock(TenantBedHistoryRepository.class);
-        occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository);
+        dashboardCache = mock(DashboardCache.class);
+        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository, dashboardCache);
 
         // Default answers for the write steps; individual tests override the lookups
         when(historyRepository.insert(tx, tenantId, bedId)).thenReturn(Future.succeededFuture(UUID.randomUUID()));

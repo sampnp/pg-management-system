@@ -13,6 +13,7 @@ import com.pgmanager.model.MaintenancePriority;
 import com.pgmanager.model.MaintenanceStatus;
 import com.pgmanager.model.Role;
 import com.pgmanager.model.Tenant;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.MaintenanceRepository;
 import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
@@ -42,12 +43,14 @@ public class MaintenanceService {
     private final MaintenanceRepository maintenanceRepository;
     private final TenantRepository tenantRepository;
     private final UserRepository userRepository;
+    private final DashboardCache dashboardCache;
 
     public MaintenanceService(MaintenanceRepository maintenanceRepository, TenantRepository tenantRepository,
-                              UserRepository userRepository) {
+                              UserRepository userRepository, DashboardCache dashboardCache) {
         this.maintenanceRepository = maintenanceRepository;
         this.tenantRepository = tenantRepository;
         this.userRepository = userRepository;
+        this.dashboardCache = dashboardCache;
     }
 
     /**
@@ -65,7 +68,8 @@ public class MaintenanceService {
                                     details.category(), priority))
                             .map(created -> created.orElseThrow(() ->
                                     new ConflictException("Tenant must be checked in to a bed to report an issue")));
-                });
+                })
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     public Future<MaintenanceIssue> findById(AuthUser caller, UUID id) {
@@ -110,7 +114,9 @@ public class MaintenanceService {
                             return maintenanceRepository.update(id, details.title(), details.description(), details.category(),
                                     priority, existing.status());
                         }))
-                .map(MaintenanceService::orConcurrentChange);
+                .map(MaintenanceService::orConcurrentChange)
+                // The priority may have changed, which changes the dashboard's urgent count
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     /** Staff only (checked on the route). The assignee must be an existing ADMIN or MANAGER. */
@@ -152,7 +158,8 @@ public class MaintenanceService {
                             }
                             return maintenanceRepository.changeStatus(id, newStatus, existing.status());
                         }))
-                .map(MaintenanceService::orConcurrentChange);
+                .map(MaintenanceService::orConcurrentChange)
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     /** All issues of a tenant, newest first, kept after check-out. Staff can see any tenant, a tenant only themselves. */

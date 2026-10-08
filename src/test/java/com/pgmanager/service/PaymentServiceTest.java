@@ -9,6 +9,7 @@ import com.pgmanager.model.PaymentMethod;
 import com.pgmanager.model.PaymentStatus;
 import com.pgmanager.model.Tenant;
 import com.pgmanager.model.TenantStatus;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PaymentRepository;
 import com.pgmanager.repository.TenantRepository;
 import io.vertx.core.Future;
@@ -51,11 +52,15 @@ class PaymentServiceTest {
     private TenantRepository tenantRepository;
     private PaymentService paymentService;
 
+    private DashboardCache dashboardCache;
+
     @BeforeEach
     void setUp() {
         paymentRepository = mock(PaymentRepository.class);
         tenantRepository = mock(TenantRepository.class);
-        paymentService = new PaymentService(paymentRepository, tenantRepository);
+        dashboardCache = mock(DashboardCache.class);
+        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        paymentService = new PaymentService(paymentRepository, tenantRepository, dashboardCache);
         // Echo back whatever the service asks the repository to save
         when(paymentRepository.create(any(), any(), any(), any(), any(), any(), any())).thenAnswer(call -> Future.succeededFuture(
                 new Payment(UUID.randomUUID(), call.getArgument(0), call.getArgument(1), call.getArgument(2), call.getArgument(3),

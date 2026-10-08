@@ -30,6 +30,8 @@ dependencies {
     implementation("io.vertx:vertx-web")
     implementation("io.vertx:vertx-pg-client")
     implementation("io.vertx:vertx-auth-jwt")
+    // Non-blocking Redis client (same Vert.x version via the BOM), used for the dashboard cache
+    implementation("io.vertx:vertx-redis-client")
 
     implementation("at.favre.lib:bcrypt:0.10.2")
 
@@ -54,6 +56,8 @@ dependencies {
     mockitoAgent("org.mockito:mockito-core:$mockitoVersion") { isTransitive = false }
     testImplementation("io.vertx:vertx-web-client")
     testImplementation("org.testcontainers:testcontainers-postgresql:$testcontainersVersion")
+    // GenericContainer, used to start a throwaway Redis for the integration tests
+    testImplementation("org.testcontainers:testcontainers:$testcontainersVersion")
 }
 
 tasks.test {

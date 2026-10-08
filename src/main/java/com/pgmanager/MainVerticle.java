@@ -1,6 +1,7 @@
 package com.pgmanager;
 
 import com.pgmanager.config.AppConfig;
+import com.pgmanager.config.Cache;
 import com.pgmanager.config.Database;
 import com.pgmanager.config.JsonConfig;
 import com.pgmanager.controller.AuthController;
@@ -17,6 +18,7 @@ import com.pgmanager.controller.UserController;
 import com.pgmanager.exception.GlobalErrorHandler;
 import com.pgmanager.model.Role;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.DashboardRepository;
 import com.pgmanager.repository.MaintenanceRepository;
 import com.pgmanager.repository.PaymentRepository;
@@ -46,6 +48,8 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
+import io.vertx.redis.client.Redis;
+import io.vertx.redis.client.RedisAPI;
 import io.vertx.sqlclient.Pool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +67,7 @@ public class MainVerticle extends VerticleBase {
 
     private final AppConfig config;
     private Pool pool;
+    private Redis redis;
 
     public MainVerticle(AppConfig config) {
         this.config = config;
@@ -74,6 +79,7 @@ public class MainVerticle extends VerticleBase {
         return Database.migrate(vertx, config.database())
                 .compose(migrated -> {
                     pool = Database.createPool(vertx, config.database());
+                    redis = Cache.createClient(vertx, config.redis());
                     return vertx.createHttpServer()
                             .requestHandler(createRouter())
                             .listen(config.httpPort());
@@ -83,7 +89,9 @@ public class MainVerticle extends VerticleBase {
 
     @Override
     public Future<?> stop() {
-        return pool != null ? pool.close() : Future.succeededFuture();
+        return Future.all(
+                pool != null ? pool.close() : Future.succeededFuture(),
+                redis != null ? redis.close() : Future.succeededFuture());
     }
 
     private Router createRouter() {
@@ -95,6 +103,9 @@ public class MainVerticle extends VerticleBase {
         AuthService authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService);
         UserService userService = new UserService(userRepository);
 
+        // Cleared by every service whose writes change a number on the dashboard
+        DashboardCache dashboardCache = new DashboardCache(RedisAPI.api(redis), config.redis().dashboardCacheTtlSeconds());
+
         PropertyRepository propertyRepository = new PropertyRepository(pool);
         RoomRepository roomRepository = new RoomRepository(pool);
         BedRepository bedRepository = new BedRepository(pool);
@@ -102,14 +113,14 @@ public class MainVerticle extends VerticleBase {
         PaymentRepository paymentRepository = new PaymentRepository(pool);
         MaintenanceRepository maintenanceRepository = new MaintenanceRepository(pool);
         DashboardRepository dashboardRepository = new DashboardRepository(pool);
-        PropertyService propertyService = new PropertyService(propertyRepository);
-        RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository);
-        BedService bedService = new BedService(pool, roomRepository, bedRepository, historyRepository);
-        TenantService tenantService = new TenantService(tenantRepository);
-        OccupancyService occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository);
-        PaymentService paymentService = new PaymentService(paymentRepository, tenantRepository);
-        MaintenanceService maintenanceService = new MaintenanceService(maintenanceRepository, tenantRepository, userRepository);
-        DashboardService dashboardService = new DashboardService(dashboardRepository);
+        PropertyService propertyService = new PropertyService(propertyRepository, dashboardCache);
+        RoomService roomService = new RoomService(propertyRepository, roomRepository, bedRepository, dashboardCache);
+        BedService bedService = new BedService(pool, roomRepository, bedRepository, historyRepository, dashboardCache);
+        TenantService tenantService = new TenantService(tenantRepository, dashboardCache);
+        OccupancyService occupancyService = new OccupancyService(pool, tenantRepository, bedRepository, historyRepository, dashboardCache);
+        PaymentService paymentService = new PaymentService(paymentRepository, tenantRepository, dashboardCache);
+        MaintenanceService maintenanceService = new MaintenanceService(maintenanceRepository, tenantRepository, userRepository, dashboardCache);
+        DashboardService dashboardService = new DashboardService(dashboardRepository, dashboardCache);
 
         HealthController healthController = new HealthController(pool);
         AuthController authController = new AuthController(authService);

@@ -7,6 +7,7 @@ import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Property;
 import com.pgmanager.model.Room;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
 import io.vertx.core.Future;
@@ -23,11 +24,14 @@ public class RoomService {
     private final PropertyRepository propertyRepository;
     private final RoomRepository roomRepository;
     private final BedRepository bedRepository;
+    private final DashboardCache dashboardCache;
 
-    public RoomService(PropertyRepository propertyRepository, RoomRepository roomRepository, BedRepository bedRepository) {
+    public RoomService(PropertyRepository propertyRepository, RoomRepository roomRepository, BedRepository bedRepository,
+                       DashboardCache dashboardCache) {
         this.propertyRepository = propertyRepository;
         this.roomRepository = roomRepository;
         this.bedRepository = bedRepository;
+        this.dashboardCache = dashboardCache;
     }
 
     public Future<Room> create(UUID propertyId, RoomRequest request) {
@@ -35,7 +39,8 @@ public class RoomService {
                 .map(RoomService::validate)
                 // Never trust the id in the URL: the property must really exist (404 otherwise)
                 .compose(valid -> requireProperty(propertyId)
-                        .compose(property -> roomRepository.create(propertyId, valid.roomNumber(), valid.capacity())));
+                        .compose(property -> roomRepository.create(propertyId, valid.roomNumber(), valid.capacity())))
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     public Future<List<Room>> listByProperty(UUID propertyId) {
@@ -70,7 +75,8 @@ public class RoomService {
                         throw new NotFoundException(ROOM_NOT_FOUND);
                     }
                     return null;
-                });
+                })
+                .compose(v -> dashboardCache.invalidate());
     }
 
     private Future<Property> requireProperty(UUID propertyId) {

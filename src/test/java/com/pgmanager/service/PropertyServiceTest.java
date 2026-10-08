@@ -4,6 +4,7 @@ import com.pgmanager.dto.PropertyRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Property;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PropertyRepository;
 import io.vertx.core.Future;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,10 +33,14 @@ class PropertyServiceTest {
     private PropertyRepository propertyRepository;
     private PropertyService propertyService;
 
+    private DashboardCache dashboardCache;
+
     @BeforeEach
     void setUp() {
         propertyRepository = mock(PropertyRepository.class);
-        propertyService = new PropertyService(propertyRepository);
+        dashboardCache = mock(DashboardCache.class);
+        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        propertyService = new PropertyService(propertyRepository, dashboardCache);
     }
 
     @Test

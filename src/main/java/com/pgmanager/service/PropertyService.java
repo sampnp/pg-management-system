@@ -3,6 +3,7 @@ package com.pgmanager.service;
 import com.pgmanager.dto.PropertyRequest;
 import com.pgmanager.exception.NotFoundException;
 import com.pgmanager.model.Property;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PropertyRepository;
 import io.vertx.core.Future;
 
@@ -18,16 +19,19 @@ public class PropertyService {
     private static final int MAX_CITY_LENGTH = 100;
 
     private final PropertyRepository propertyRepository;
+    private final DashboardCache dashboardCache;
 
-    public PropertyService(PropertyRepository propertyRepository) {
+    public PropertyService(PropertyRepository propertyRepository, DashboardCache dashboardCache) {
         this.propertyRepository = propertyRepository;
+        this.dashboardCache = dashboardCache;
     }
 
     public Future<Property> create(PropertyRequest request) {
         // If validate() throws, map() turns the exception into a failed Future (-> 400 response)
         return Future.succeededFuture(request)
                 .map(PropertyService::validate)
-                .compose(valid -> propertyRepository.create(valid.name(), valid.address(), valid.city()));
+                .compose(valid -> propertyRepository.create(valid.name(), valid.address(), valid.city()))
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     public Future<List<Property>> findAll() {
@@ -53,7 +57,8 @@ public class PropertyService {
                         throw new NotFoundException(PROPERTY_NOT_FOUND);
                     }
                     return null;
-                });
+                })
+                .compose(v -> dashboardCache.invalidate());
     }
 
     /** Returns a copy with trimmed values, or throws BadRequestException. */

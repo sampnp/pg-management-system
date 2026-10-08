@@ -9,6 +9,7 @@ import com.pgmanager.model.Occupancy;
 import com.pgmanager.model.Tenant;
 import com.pgmanager.model.TenantStatus;
 import com.pgmanager.repository.BedRepository;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.TenantBedHistoryRepository;
 import com.pgmanager.repository.TenantRepository;
 import io.vertx.core.Future;
@@ -33,13 +34,15 @@ public class OccupancyService {
     private final TenantRepository tenantRepository;
     private final BedRepository bedRepository;
     private final TenantBedHistoryRepository historyRepository;
+    private final DashboardCache dashboardCache;
 
     public OccupancyService(Pool pool, TenantRepository tenantRepository, BedRepository bedRepository,
-                            TenantBedHistoryRepository historyRepository) {
+                            TenantBedHistoryRepository historyRepository, DashboardCache dashboardCache) {
         this.pool = pool;
         this.tenantRepository = tenantRepository;
         this.bedRepository = bedRepository;
         this.historyRepository = historyRepository;
+        this.dashboardCache = dashboardCache;
     }
 
     public Future<Occupancy> checkIn(UUID tenantId, CheckInRequest request) {
@@ -62,7 +65,9 @@ public class OccupancyService {
                         .compose(stayId -> bedRepository.updateStatus(tx, bedId, BedStatus.OCCUPIED))
                         .compose(bed -> tenantRepository.updateStatus(tx, tenantId, TenantStatus.ACTIVE))
                         .compose(v -> historyRepository.findCurrentByTenantId(tx, tenantId))
-                        .map(Optional::orElseThrow)));
+                        .map(Optional::orElseThrow)))
+                // Bed and tenant counts changed; cleared only after the transaction has committed
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     public Future<Occupancy> checkOut(UUID tenantId) {
@@ -75,7 +80,8 @@ public class OccupancyService {
                         .compose(v -> bedRepository.updateStatus(tx, stay.bedId(), BedStatus.AVAILABLE))
                         .compose(bed -> tenantRepository.updateStatus(tx, tenantId, TenantStatus.CHECKED_OUT))
                         .compose(v -> historyRepository.findById(tx, stay.id())))
-                .map(Optional::orElseThrow));
+                .map(Optional::orElseThrow))
+                .compose(saved -> dashboardCache.invalidate().map(saved));
     }
 
     /** The tenant's current stay; 404 if the tenant is not checked in anywhere. */

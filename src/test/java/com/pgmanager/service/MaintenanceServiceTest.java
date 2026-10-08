@@ -15,6 +15,7 @@ import com.pgmanager.model.Role;
 import com.pgmanager.model.Tenant;
 import com.pgmanager.model.TenantStatus;
 import com.pgmanager.model.User;
+import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.MaintenanceRepository;
 import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
@@ -60,12 +61,16 @@ class MaintenanceServiceTest {
     private UserRepository userRepository;
     private MaintenanceService maintenanceService;
 
+    private DashboardCache dashboardCache;
+
     @BeforeEach
     void setUp() {
         maintenanceRepository = mock(MaintenanceRepository.class);
         tenantRepository = mock(TenantRepository.class);
         userRepository = mock(UserRepository.class);
-        maintenanceService = new MaintenanceService(maintenanceRepository, tenantRepository, userRepository);
+        dashboardCache = mock(DashboardCache.class);
+        when(dashboardCache.invalidate()).thenReturn(Future.succeededFuture());
+        maintenanceService = new MaintenanceService(maintenanceRepository, tenantRepository, userRepository, dashboardCache);
     }
 
     // ---------- create ----------
