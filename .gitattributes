@@ -1,0 +1,4 @@
+# gradlew must keep LF line endings to run on Linux/macOS; the .bat script needs CRLF
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
