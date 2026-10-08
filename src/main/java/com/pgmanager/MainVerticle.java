@@ -154,6 +154,8 @@ public class MainVerticle extends VerticleBase {
 
         router.post("/api/tenants/:tenantId/check-in").handler(occupancyController::checkIn);
         router.post("/api/tenants/:tenantId/check-out").handler(occupancyController::checkOut);
+        router.get("/api/tenants/:tenantId/bed").handler(occupancyController::currentBed);
+        router.get("/api/tenants/:tenantId/history").handler(occupancyController::history);
 
         // Errors: failures from any route, plus "no route matched" (404) and "wrong method" (405)
         router.route().failureHandler(errorHandler);

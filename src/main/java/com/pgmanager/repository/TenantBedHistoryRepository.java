@@ -8,6 +8,7 @@ import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.Tuple;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -31,6 +32,13 @@ public class TenantBedHistoryRepository {
         return client.preparedQuery(SELECT_OCCUPANCY + "WHERE h.tenant_id = $1 AND h.check_out IS NULL")
                 .execute(Tuple.of(tenantId))
                 .map(rows -> DbUtils.firstRow(rows).map(TenantBedHistoryRepository::toOccupancy));
+    }
+
+    /** All stays of a tenant, newest first. */
+    public Future<List<Occupancy>> findByTenantId(SqlClient client, UUID tenantId) {
+        return client.preparedQuery(SELECT_OCCUPANCY + "WHERE h.tenant_id = $1 ORDER BY h.check_in DESC, h.id DESC")
+                .execute(Tuple.of(tenantId))
+                .map(rows -> DbUtils.mapAll(rows, TenantBedHistoryRepository::toOccupancy));
     }
 
     public Future<Optional<Occupancy>> findById(SqlClient client, UUID id) {

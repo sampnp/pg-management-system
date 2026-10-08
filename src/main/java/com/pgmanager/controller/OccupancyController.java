@@ -26,4 +26,18 @@ public class OccupancyController {
                 .onSuccess(ctx::json)
                 .onFailure(ctx::fail);
     }
+
+    /** GET /api/tenants/:tenantId/bed */
+    public void currentBed(RoutingContext ctx) {
+        occupancyService.currentBed(PathParams.uuid(ctx, "tenantId"))
+                .onSuccess(ctx::json)
+                .onFailure(ctx::fail);
+    }
+
+    /** GET /api/tenants/:tenantId/history */
+    public void history(RoutingContext ctx) {
+        occupancyService.history(PathParams.uuid(ctx, "tenantId"))
+                .onSuccess(ctx::json)
+                .onFailure(ctx::fail);
+    }
 }

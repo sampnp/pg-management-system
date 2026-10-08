@@ -16,6 +16,7 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.SqlConnection;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -76,6 +77,24 @@ public class OccupancyService {
                         .compose(bed -> tenantRepository.updateStatus(tx, tenantId, TenantStatus.CHECKED_OUT))
                         .compose(v -> historyRepository.findById(tx, stay.id())))
                 .map(Optional::orElseThrow));
+    }
+
+    /** The tenant's current stay; 404 if the tenant is not checked in anywhere. */
+    public Future<Occupancy> currentBed(UUID tenantId) {
+        return requireTenant(tenantId)
+                .compose(tenant -> historyRepository.findCurrentByTenantId(pool, tenantId))
+                .map(stay -> stay.orElseThrow(() -> new NotFoundException("Tenant is not checked in to any bed")));
+    }
+
+    /** All stays of the tenant, newest first. */
+    public Future<List<Occupancy>> history(UUID tenantId) {
+        return requireTenant(tenantId)
+                .compose(tenant -> historyRepository.findByTenantId(pool, tenantId));
+    }
+
+    private Future<Tenant> requireTenant(UUID tenantId) {
+        return tenantRepository.findById(tenantId)
+                .map(tenant -> tenant.orElseThrow(() -> new NotFoundException(TenantService.TENANT_NOT_FOUND)));
     }
 
     private Future<Tenant> lockTenant(SqlConnection tx, UUID tenantId) {
