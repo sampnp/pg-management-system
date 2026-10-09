@@ -48,6 +48,7 @@ import com.pgmanager.service.UserService;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.VerticleBase;
+import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
@@ -60,6 +61,7 @@ import io.vertx.sqlclient.Pool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 
@@ -71,10 +73,13 @@ public class MainVerticle extends VerticleBase {
 
     private static final Logger log = LoggerFactory.getLogger(MainVerticle.class);
     private static final long MAX_BODY_BYTES = 64 * 1024;
+    /** On stop, running requests get this long to finish before the server is closed. */
+    private static final Duration SHUTDOWN_GRACE = Duration.ofSeconds(10);
 
     private final AppConfig config;
     private Pool pool;
     private Redis redis;
+    private HttpServer server;
     private AuthService authService;
 
     public MainVerticle(AppConfig config) {
@@ -94,7 +99,10 @@ public class MainVerticle extends VerticleBase {
                                     .requestHandler(router)
                                     .listen(config.httpPort()));
                 })
-                .onSuccess(server -> log.info("HTTP server listening on port {}", server.actualPort()));
+                .onSuccess(started -> {
+                    server = started;
+                    log.info("HTTP server listening on port {}", started.actualPort());
+                });
     }
 
     private Future<Void> createFirstAdminIfConfigured() {
@@ -104,11 +112,20 @@ public class MainVerticle extends VerticleBase {
                 : Future.succeededFuture();
     }
 
+    /**
+     * Graceful stop (runs when Vert.x closes, e.g. on SIGTERM from "docker compose stop"):
+     * first the server stops accepting connections and lets running requests finish, and only then are the
+     * database pool and Redis client closed - the running requests may still need them.
+     */
     @Override
     public Future<?> stop() {
-        return Future.all(
-                pool != null ? pool.close() : Future.succeededFuture(),
-                redis != null ? redis.close() : Future.succeededFuture());
+        log.info("Stopping: no new requests, waiting up to {} seconds for running ones", SHUTDOWN_GRACE.toSeconds());
+        Future<Void> serverStopped = server != null ? server.shutdown(SHUTDOWN_GRACE) : Future.succeededFuture();
+        return serverStopped
+                .eventually(() -> Future.all(
+                        pool != null ? pool.close() : Future.succeededFuture(),
+                        redis != null ? redis.close() : Future.succeededFuture()))
+                .onComplete(done -> log.info("Stopped: HTTP server, database pool and Redis client closed"));
     }
 
     private Router createRouter() {

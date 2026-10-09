@@ -31,6 +31,8 @@ services:
       - "${HTTP_PORT:-8080}:8080"
     # If startup fails (e.g. the database is restarting), Docker starts the app again
     restart: unless-stopped
+    # Time between SIGTERM and SIGKILL on "docker compose stop": room for the app's graceful shutdown
+    stop_grace_period: 30s
 
   postgres:
     image: postgres:17-alpine
