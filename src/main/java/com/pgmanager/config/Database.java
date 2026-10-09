@@ -73,8 +73,9 @@ public final class Database {
                     .dataSource(config.jdbcUrl(), config.user(), config.password())
                     .load()
                     .migrate();
-            log.info("Database migrations applied: {} (schema version {})",
-                    result.migrationsExecuted, result.targetSchemaVersion);
+            // targetSchemaVersion is null when nothing had to run; the schema is then still at initialSchemaVersion
+            String version = result.targetSchemaVersion != null ? result.targetSchemaVersion : result.initialSchemaVersion;
+            log.info("Database migrations applied: {} (schema version {})", result.migrationsExecuted, version);
             return null;
         });
     }
