@@ -1,5 +1,6 @@
 package com.pgmanager.exception;
 
+import com.pgmanager.controller.RequestLogHandler;
 import io.vertx.core.Handler;
 import io.vertx.core.json.DecodeException;
 import io.vertx.ext.web.RoutingContext;
@@ -39,7 +40,8 @@ public class GlobalErrorHandler implements Handler<RoutingContext> {
                 yield ApiError.of(ctx.statusCode(), defaultMessage(ctx.statusCode()));
             }
             default -> {
-                log.error("Unhandled error on {} {}", ctx.request().method(), ctx.request().path(), ctx.failure());
+                log.error("Unhandled error on {} {} (request id={})", ctx.request().method(), ctx.request().path(),
+                        RequestLogHandler.requestId(ctx), ctx.failure());
                 yield ApiError.of(500, "Internal server error");
             }
         };

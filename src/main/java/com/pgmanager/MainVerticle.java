@@ -13,6 +13,7 @@ import com.pgmanager.controller.MaintenanceController;
 import com.pgmanager.controller.OccupancyController;
 import com.pgmanager.controller.PaymentController;
 import com.pgmanager.controller.PropertyController;
+import com.pgmanager.controller.RequestLogHandler;
 import com.pgmanager.controller.RoomController;
 import com.pgmanager.controller.TenantController;
 import com.pgmanager.controller.UserController;
@@ -155,7 +156,8 @@ public class MainVerticle extends VerticleBase {
         GlobalErrorHandler errorHandler = new GlobalErrorHandler();
 
         Router router = Router.router(vertx);
-        // Security headers on every response (also errors and 404s)
+        // Request id + one log line per request, then security headers on every response (also errors and 404s)
+        router.route().handler(new RequestLogHandler());
         router.route().handler(new SecurityHeadersHandler());
         // CORS only when one browser origin is configured; otherwise browsers can't call the API cross-site
         if (config.security().corsEnabled()) {
