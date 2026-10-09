@@ -4,6 +4,7 @@ import com.pgmanager.config.AppConfig;
 import com.pgmanager.config.Cache;
 import com.pgmanager.config.Database;
 import com.pgmanager.config.JsonConfig;
+import com.pgmanager.config.RedisBackoff;
 import com.pgmanager.config.SecurityConfig;
 import com.pgmanager.controller.AuthController;
 import com.pgmanager.controller.BedController;
@@ -134,12 +135,14 @@ public class MainVerticle extends VerticleBase {
         TenantRepository tenantRepository = new TenantRepository(pool);
         PasswordHasher passwordHasher = new PasswordHasher(PasswordHasher.DEFAULT_COST);
         JwtService jwtService = new JwtService(vertx, config.jwt());
+        // One back-off for every Redis user: after a Redis failure, nobody waits for Redis for a few seconds
+        RedisBackoff redisBackoff = new RedisBackoff();
         authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService,
-                config.security().allowPublicRegistration(), new LoginRateLimiter(RedisAPI.api(redis)));
+                config.security().allowPublicRegistration(), new LoginRateLimiter(RedisAPI.api(redis), redisBackoff));
         UserService userService = new UserService(userRepository);
 
         // Cleared by every service whose writes change a number on the dashboard
-        DashboardCache dashboardCache = new DashboardCache(RedisAPI.api(redis), config.redis().dashboardCacheTtlSeconds());
+        DashboardCache dashboardCache = new DashboardCache(RedisAPI.api(redis), redisBackoff, config.redis().dashboardCacheTtlSeconds());
 
         PropertyRepository propertyRepository = new PropertyRepository(pool);
         RoomRepository roomRepository = new RoomRepository(pool);

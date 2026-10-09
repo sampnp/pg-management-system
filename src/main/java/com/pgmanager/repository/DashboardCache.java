@@ -1,5 +1,6 @@
 package com.pgmanager.repository;
 
+import com.pgmanager.config.RedisBackoff;
 import io.vertx.core.Future;
 import io.vertx.redis.client.RedisAPI;
 import io.vertx.redis.client.Response;
@@ -37,12 +38,14 @@ public class DashboardCache {
     private static final int CLEARED_SECONDS = 5;
 
     private final RedisAPI redis;
+    private final RedisBackoff backoff;
     private final int ttlSeconds;
     /** Keys whose clear failed; this application instance clears them again before trusting the cache. */
     private final Set<String> pendingClears = ConcurrentHashMap.newKeySet();
 
-    public DashboardCache(RedisAPI redis, int ttlSeconds) {
+    public DashboardCache(RedisAPI redis, RedisBackoff backoff, int ttlSeconds) {
         this.redis = redis;
+        this.backoff = backoff;
         this.ttlSeconds = ttlSeconds;
     }
 
@@ -56,7 +59,7 @@ public class DashboardCache {
      */
     public Future<Optional<String>> get(String key) {
         return clearPending()
-                .compose(v -> redis.get(key))
+                .compose(v -> backoff.call(() -> redis.get(key)))
                 .map(response -> Optional.ofNullable(response).map(Response::toString));
     }
 
@@ -65,12 +68,12 @@ public class DashboardCache {
      * If a write cleared the key in the meantime it holds CLEARED, and the possibly older value is not stored.
      */
     public Future<Void> putIfAbsent(String key, String json) {
-        return redis.set(List.of(key, json, "EX", String.valueOf(ttlSeconds), "NX")).mapEmpty();
+        return backoff.call(() -> redis.set(List.of(key, json, "EX", String.valueOf(ttlSeconds), "NX"))).mapEmpty();
     }
 
     /** Replaces whatever is cached (used for a value that could not be read). SET key value EX ttl. */
     public Future<Void> put(String key, String json) {
-        return redis.set(List.of(key, json, "EX", String.valueOf(ttlSeconds))).mapEmpty();
+        return backoff.call(() -> redis.set(List.of(key, json, "EX", String.valueOf(ttlSeconds)))).mapEmpty();
     }
 
     /**
@@ -106,7 +109,7 @@ public class DashboardCache {
     /** SET key CLEARED EX CLEARED_SECONDS for every key. */
     private Future<Void> markCleared(Collection<String> keys) {
         List<Future<Response>> sets = keys.stream()
-                .map(key -> redis.set(List.of(key, CLEARED, "EX", String.valueOf(CLEARED_SECONDS))))
+                .map(key -> backoff.call(() -> redis.set(List.of(key, CLEARED, "EX", String.valueOf(CLEARED_SECONDS)))))
                 .toList();
         return Future.all(sets).mapEmpty();
     }

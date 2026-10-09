@@ -1,6 +1,7 @@
 package com.pgmanager.service;
 
 import com.pgmanager.config.JsonConfig;
+import com.pgmanager.config.RedisBackoff;
 import com.pgmanager.dto.DashboardSummary;
 import com.pgmanager.dto.PropertyDashboard;
 import com.pgmanager.exception.NotFoundException;
@@ -68,7 +69,7 @@ class DashboardServiceTest {
     void setUp() {
         redis = mock(RedisAPI.class);
         dashboardRepository = mock(DashboardRepository.class);
-        dashboardCache = new DashboardCache(redis, TTL_SECONDS);
+        dashboardCache = new DashboardCache(redis, RedisBackoff.none(), TTL_SECONDS);
         dashboardService = new DashboardService(dashboardRepository, dashboardCache);
         when(dashboardRepository.loadSummary()).thenReturn(Future.succeededFuture(summary));
     }
@@ -112,7 +113,7 @@ class DashboardServiceTest {
 
     @Test
     void ttlComesFromConfiguration() throws Exception {
-        dashboardService = new DashboardService(dashboardRepository, new DashboardCache(redis, 15));
+        dashboardService = new DashboardService(dashboardRepository, new DashboardCache(redis, RedisBackoff.none(), 15));
         cacheIsEmpty();
         when(redis.set(anyList())).thenReturn(Future.succeededFuture());
 

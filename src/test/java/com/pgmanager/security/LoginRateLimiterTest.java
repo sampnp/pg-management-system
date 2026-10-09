@@ -1,5 +1,6 @@
 package com.pgmanager.security;
 
+import com.pgmanager.config.RedisBackoff;
 import io.vertx.core.Future;
 import io.vertx.redis.client.RedisAPI;
 import io.vertx.redis.client.Response;
@@ -35,7 +36,7 @@ class LoginRateLimiterTest {
     @BeforeEach
     void setUp() {
         redis = mock(RedisAPI.class);
-        limiter = new LoginRateLimiter(redis);
+        limiter = new LoginRateLimiter(redis, RedisBackoff.none());
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.pgmanager.security;
 
+import com.pgmanager.config.RedisBackoff;
 import io.vertx.core.Future;
 import io.vertx.redis.client.RedisAPI;
 import org.slf4j.Logger;
@@ -31,9 +32,11 @@ public class LoginRateLimiter {
     private static final String KEY_PREFIX = "auth:login:fail:";
 
     private final RedisAPI redis;
+    private final RedisBackoff backoff;
 
-    public LoginRateLimiter(RedisAPI redis) {
+    public LoginRateLimiter(RedisAPI redis, RedisBackoff backoff) {
         this.redis = redis;
+        this.backoff = backoff;
     }
 
     /**
@@ -53,12 +56,12 @@ public class LoginRateLimiter {
     /** Seconds until this IP + email may try again, or empty if a login attempt is allowed now. */
     public Future<OptionalLong> blockedFor(String clientIp, String normalizedEmail) {
         String key = key(clientIp, normalizedEmail);
-        return redis.get(key)
+        return backoff.call(() -> redis.get(key))
                 .compose(count -> {
                     if (count == null || count.toLong() < MAX_FAILURES) {
                         return Future.succeededFuture(OptionalLong.empty());
                     }
-                    return redis.ttl(key).map(ttl -> {
+                    return backoff.call(() -> redis.ttl(key)).map(ttl -> {
                         long seconds = ttl == null ? -1 : ttl.toLong();
                         return OptionalLong.of(seconds > 0 ? seconds : WINDOW_SECONDS);
                     });
@@ -75,8 +78,8 @@ public class LoginRateLimiter {
      */
     public Future<Void> recordFailure(String clientIp, String normalizedEmail) {
         String key = key(clientIp, normalizedEmail);
-        return redis.incr(key)
-                .compose(count -> redis.expire(List.of(key, String.valueOf(WINDOW_SECONDS), "NX")))
+        return backoff.call(() -> redis.incr(key))
+                .compose(count -> backoff.call(() -> redis.expire(List.of(key, String.valueOf(WINDOW_SECONDS), "NX"))))
                 .<Void>mapEmpty()
                 .recover(err -> {
                     log.warn("Failed login not counted, Redis unavailable: {}", err.getMessage());
@@ -86,7 +89,7 @@ public class LoginRateLimiter {
 
     /** A successful login clears the failures of that IP + email. */
     public Future<Void> reset(String clientIp, String normalizedEmail) {
-        return redis.del(List.of(key(clientIp, normalizedEmail)))
+        return backoff.call(() -> redis.del(List.of(key(clientIp, normalizedEmail))))
                 .<Void>mapEmpty()
                 .recover(err -> {
                     log.warn("Login failures not cleared, Redis unavailable: {}", err.getMessage());
