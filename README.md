@@ -3,12 +3,13 @@
 A backend for running a PG (paying guest accommodation): properties, rooms and beds, tenants and their
 check-ins, rent payments and maintenance complaints, plus dashboards with the main numbers.
 
-It is a REST API only (JSON over HTTP); there is no frontend in this repository.
+It is a REST API only (JSON over HTTP); there is no frontend in this repository. For the reasoning behind the
+design, see [docs/interview-notes.md](docs/interview-notes.md).
 
 **Who uses it**
 
-- **ADMIN / MANAGER** (staff): manage properties, rooms, beds, tenants, payments and maintenance, and see the dashboards.
-  ADMINs also create staff accounts, change roles and switch accounts off.
+- **ADMIN / MANAGER** (staff): manage properties, rooms, beds, tenants, payments and maintenance, and see the
+  dashboards. ADMINs also create staff accounts, change roles and switch accounts off.
 - **TENANT**: a tenant's own login. A tenant can report maintenance issues, see their own issues and change their
   password, nothing else.
 
@@ -20,99 +21,112 @@ It is a REST API only (JSON over HTTP); there is no frontend in this repository.
 - Maintenance issues: reported by tenants or staff, assigned to staff, OPEN → IN_PROGRESS → RESOLVED → CLOSED
 - A PG-wide dashboard and a dashboard per property, cached in Redis
 - Paged lists (`?page=0&size=20`) for properties, tenants, payments and maintenance
-- JWT authentication with ADMIN, MANAGER and TENANT roles; accounts are checked on every request
+- JWT authentication with ADMIN, MANAGER and TENANT roles; the account is checked on every request;
+  login is rate-limited
+- Request ids and one log line per request; graceful shutdown
 - Runs as three containers with Docker Compose: the API, PostgreSQL and Redis
-
-**Why Redis?** The dashboards aggregate several tables and are opened often, but don't need to-the-millisecond
-numbers, so the results are cached for a short time. Redis is only a cache: PostgreSQL is the source of
-truth, and the application keeps working if Redis is down.
-
-## Tech stack
-
-| | |
-|---|---|
-| Language | Java 25 |
-| Framework | Vert.x 5 (vertx-web, reactive PostgreSQL client, Redis client, auth-jwt) |
-| Build | Gradle (wrapper included) |
-| Database | PostgreSQL 17, schema managed by Flyway |
-| Cache | Redis 7 |
-| Security | JWT (HS256), BCrypt password hashing |
-| Tests | JUnit 5, Mockito, Testcontainers |
-| Deployment | Docker (multi-stage image) and Docker Compose |
-
-There is no Spring, no ORM and no JDBC at request time. Database access uses the non-blocking Vert.x
-PostgreSQL client with parameterized SQL. JDBC is used only by Flyway, once at startup, on a worker thread.
 
 ## Architecture
 
-One Vert.x application (a single verticle) with a classic layered structure:
+One Vert.x application (a single verticle) - a modular monolith with a classic layered structure:
+
+```text
+Client (curl, Postman, a future frontend)
+  |
+  v
+Vert.x HTTP API (one process, port 8080)
+  |
+  +--> Router: request log + id -> security headers -> (CORS) -> body limit
+  |            -> JwtAuthHandler (token + account check) -> RoleHandler (role check)
+  |
+  +--> Controllers   read the request, call a service, write JSON
+  |
+  +--> Services      validation, business rules, transactions, "is this your own data?" checks
+  |
+  +--> Repositories  parameterized SQL
+  |       |
+  |       v
+  |   PostgreSQL  (source of truth; Flyway migrations at startup)
+  |
+  +--> Redis      (dashboard cache + login rate limit; optional - the app works without it)
+```
 
 ```text
 src/main/java/com/pgmanager
-├── Main.java / MainVerticle.java   startup, manual dependency wiring, routes
-├── controller   HTTP layer: read the request, call a service, write the JSON response
+├── Main.java / MainVerticle.java   startup, shutdown, manual dependency wiring, routes
+├── controller   HTTP layer (+ RequestLogHandler)
 ├── service      business rules, validation, access rules that depend on the data
 ├── repository   SQL (PostgreSQL) and the Redis dashboard cache
 ├── model        records for database rows and enums (Role, BedStatus, ...)
 ├── dto          request and response bodies (including Page and the dashboards)
-├── security     JWT, the account check on each request, role checks, BCrypt, security headers
+├── security     JWT, account check, role checks, BCrypt, login rate limiter, security headers
 ├── config       environment configuration, database pool, Flyway, Redis client, JSON setup
 └── exception    API exceptions and the global error handler
 ```
 
-Request flow:
-
-```text
-HTTP request
- ↓
-Router: security headers → (CORS, if configured) → BodyHandler
-        → JwtAuthHandler (protected routes: verify the token, load the account) → RoleHandler (role check)
- ↓
-Controller
- ↓
-Service ──────────────→ DashboardCache (Redis)   - dashboard reads, and clearing them after writes
- ↓
-Repository
- ↓
-PostgreSQL
-```
-
-- Everything is asynchronous: methods return Vert.x `Future`s and nothing blocks the event loop.
+- **Request flow:** controller → service → repository → PostgreSQL. Security is enforced before the controller
+  (token, account, role); rules that depend on the data itself (a tenant's own issue) are checked in the service.
+- **Non-blocking:** every database and Redis call returns a Vert.x `Future`; nothing blocks the event loop.
   BCrypt hashing and Flyway run on worker threads.
-- Writes that must succeed together (check-in, check-out, manual bed status) run in one PostgreSQL
-  transaction with `SELECT ... FOR UPDATE` row locks.
-- Errors from any layer go to `GlobalErrorHandler`, which always answers with the same JSON shape. Unexpected
-  errors become a plain 500; database messages and stack traces only go to the log.
+- **Transactions** are used only where several writes must succeed or fail together (see "Transactions").
+- **Errors** from any layer go to `GlobalErrorHandler`, which always answers with the same JSON shape. Unexpected
+  errors become a plain 500; exception details and stack traces only go to the log (with the request id).
 
   ```json
   { "status": 404, "error": "NOT_FOUND", "message": "Tenant not found", "timestamp": "2026-10-09T10:15:30Z" }
   ```
+
+## Technology stack
+
+| Technology | Why it is here |
+|---|---|
+| Java 25 | Records, pattern matching (`switch` over exceptions), text blocks for SQL |
+| Vert.x 5 | Small, explicit, non-blocking HTTP server and clients; no hidden framework magic |
+| Vert.x reactive PostgreSQL client | Non-blocking database access with plain parameterized SQL (no ORM, no JDBC at request time) |
+| PostgreSQL 17 | Transactions, row locks, constraints and partial unique indexes keep the data correct |
+| Flyway | Versioned schema migrations, run once at startup (JDBC, on a worker thread) |
+| Redis 7 + Vert.x Redis client | Short-lived cache for the dashboards, counters for login rate limiting |
+| JWT (HS256, vertx-auth-jwt) | Stateless login tokens |
+| BCrypt (cost 12) | Slow, salted password hashing |
+| JUnit 5, Mockito | Unit tests of services with mocked repositories |
+| Testcontainers | Integration tests against real throwaway PostgreSQL and Redis |
+| Docker / Docker Compose | Reproducible build (multi-stage image) and the three-container stack |
+| slf4j-simple | Plain log lines on stderr (`docker compose logs app`) |
 
 ## Running with Docker (recommended)
 
 Requirements: Docker with Docker Compose.
 
 ```bash
-cp .env.example .env          # then edit it - see "Environment variables" below
+cp .env.example .env          # then edit it - see "Environment variables"
 docker compose up --build -d  # builds the API image and starts app, postgres and redis
 docker compose ps             # all three should become "healthy"
 curl http://localhost:8080/api/health
 # {"status":"UP","database":"UP"}
 ```
 
-- **app** waits until PostgreSQL is healthy, runs the Flyway migrations, and listens on `localhost:8080`.
-  If it fails to start (for example the database restarts at the same moment), Docker restarts it.
-- Inside Compose the app talks to `postgres:5432` and `redis:6379` by service name. PostgreSQL and Redis are
-  also published on `127.0.0.1` only (ports `DATABASE_PORT` / `REDIS_PORT`), for local tools - not to other machines.
-- The app's health check calls `GET /api/health`, which answers 503 when PostgreSQL is unreachable.
-  Redis is not part of it: it is only a cache.
-- Redis runs without persistence, so a restart starts with an empty cache.
-- `docker compose down` stops everything and keeps the database volume; `docker compose down -v` also
-  **deletes all data**.
+Stopping:
 
-The image is built in two stages: a JDK stage runs `./gradlew installDist`, and the final image contains only a
-JRE (Temurin 25), the application (`bin/pg-manager` + `lib/`) and curl for the health check. It runs as a
-non-root user, and no configuration or secret is baked in.
+```bash
+docker compose stop           # stop the containers, keep everything
+docker compose down           # remove the containers, KEEP the database volume
+docker compose down -v        # also DELETES the database volume (all data)
+docker compose logs -f app    # follow the application log
+```
+
+- **app** waits until PostgreSQL is healthy, runs the Flyway migrations and listens on `localhost:8080`. If
+  startup fails (for example the database restarts at that moment), Docker starts it again.
+- Inside Compose the app talks to `postgres:5432` and `redis:6379` by service name. PostgreSQL and Redis are also
+  published on `127.0.0.1` only (`DATABASE_PORT` / `REDIS_PORT`), for local tools - not to other machines.
+- The health check calls `GET /api/health`, which answers 503 when PostgreSQL is unreachable. Redis is not part
+  of it: it is optional.
+- **Graceful shutdown:** `docker compose stop app` sends SIGTERM. The app stops accepting connections, lets running
+  requests finish (up to 10 s), then closes the database pool and the Redis client (`stop_grace_period: 30s`).
+- Redis keeps nothing on disk, so a restart starts with an empty cache.
+
+The image is built in two stages: a JDK stage runs `./gradlew installDist`; the final image has only a JRE
+(Temurin 25), the application (`bin/pg-manager` + `lib/`) and curl for the health check. It runs as a non-root
+user (`app`) and contains no configuration or secrets.
 
 ### Running from source (development)
 
@@ -120,17 +134,17 @@ Requirements: JDK 25 and Docker.
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres redis   # only the infrastructure
+docker compose up -d postgres redis   # only the infrastructure (or: docker compose stop app)
 ./gradlew run                         # on Windows: gradlew.bat run; reads .env automatically
 ```
 
-If the `app` container is running, stop it first (`docker compose stop app`), because both use port 8080.
+Both the app container and `./gradlew run` use port 8080, so only one of them can run at a time.
 
 ## Environment variables
 
-All configuration comes from environment variables (see `.env.example`). `.env` is git-ignored and excluded
-from the Docker build; never commit it. The application stops at startup with a clear message if a value is
-missing or unsafe.
+All configuration comes from environment variables (see `.env.example`). `.env` is git-ignored and excluded from
+the Docker build; never commit it. The application stops at startup with a clear message if a value is missing
+or unsafe.
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -139,8 +153,7 @@ missing or unsafe.
 | `DATABASE_HOST` | `localhost` | Compose sets `postgres` for the app container |
 | `DATABASE_PORT` | `5432` | `.env.example` uses `5433` (host port, avoids a local PostgreSQL) |
 | `DATABASE_NAME` | `pg_manager` | |
-| `DATABASE_USER` | — | required |
-| `DATABASE_PASSWORD` | — | required |
+| `DATABASE_USER` / `DATABASE_PASSWORD` | — | required |
 | `REDIS_HOST` | `localhost` | Compose sets `redis` for the app container |
 | `REDIS_PORT` | `6379` | |
 | `DASHBOARD_CACHE_TTL_SECONDS` | `60` | how long a dashboard stays cached |
@@ -151,8 +164,8 @@ missing or unsafe.
 | `CORS_ALLOWED_ORIGIN` | — | optional; the one browser origin allowed to call the API |
 
 `.env.example` sets `APP_ENV=development`, so its placeholder secret works locally. For a real deployment set
-`APP_ENV=production` and real values. The database is configured with host, port, name, user and password
-variables (there is no single database URL variable).
+`APP_ENV=production` and real values. The log level can be raised without rebuilding:
+`JAVA_OPTS="-Dorg.slf4j.simpleLogger.defaultLogLevel=debug"`.
 
 ## First ADMIN account
 
@@ -164,42 +177,55 @@ Public registration is **off by default**, so the first ADMIN is created from co
    does nothing - it never turns an existing account into an ADMIN.
 3. Log in, then remove the two variables from `.env` (they are ignored from now on anyway).
 
-After that, ADMINs create the other staff accounts through the API (`POST /api/admin/users`).
+After that, ADMINs create the other staff accounts with `POST /api/admin/users`.
 
-Alternative without the bootstrap variables: with database access, change a user's role directly, e.g.
+Alternative with database access (useful when public registration is switched on for local testing):
 
 ```bash
 docker compose exec postgres psql -U pgmanager -d pg_manager \
   -c "UPDATE users SET role = 'ADMIN' WHERE email = 'you@example.com';"
 ```
 
-(use your own `DATABASE_USER` / `DATABASE_NAME`). This needs an existing account, so it is mainly useful when
-public registration is switched on for local testing.
-
 ## Authentication
 
-- **Login** returns a JWT signed with HS256 (`JWT_SECRET`). Send it as `Authorization: Bearer <token>`.
-  It expires after `JWT_EXPIRATION_SECONDS`.
+- **Login** (`POST /api/auth/login`) returns a JWT signed with HS256 (`JWT_SECRET`), sent as
+  `Authorization: Bearer <token>`. It expires after `JWT_EXPIRATION_SECONDS`.
+- **Passwords** are hashed with BCrypt (cost 12) on a worker thread, 8 to 72 characters, never stored, logged or
+  returned. A wrong password and an unknown email give the same 401 and take the same time.
 - **Roles**
-  - `ADMIN`: staff, plus the `/api/admin` endpoints.
-  - `MANAGER`: staff. Created by an ADMIN (or by public registration if it is switched on).
-  - `TENANT`: created by staff for one tenant (`POST /api/tenants/:tenantId/account`); only maintenance
-    endpoints for their own data, plus their own password.
-- **Account check on every request.** After verifying the token's signature and expiry, `JwtAuthHandler` loads
+  - `ADMIN`: staff, plus `/api/admin` (create staff accounts, change roles, switch accounts off).
+  - `MANAGER`: staff. Created by an ADMIN (or by public registration if switched on).
+  - `TENANT`: created by staff for one tenant (`POST /api/tenants/:tenantId/account`); only their own maintenance
+    data and their own password.
+- **Account check on every request.** After the token's signature and expiry are verified, `JwtAuthHandler` loads
   the account (one primary-key query) and uses its *current* role. So, immediately:
   - a role change applies to the next request, even with an old token;
   - a switched-off account (`PATCH /api/admin/users/:id/active`) gets 401 "Account is disabled";
   - a deleted account (a tenant's login is deleted with the tenant) gets 401;
-  - a password change makes every older token invalid (each token carries the account's token version).
-- **Passwords** are hashed with BCrypt (cost 12) on a worker thread, 8 to 72 characters, never stored or returned.
-- **Protection**: 401 for a missing/invalid/expired token or a disabled account, 403 for the wrong role.
-  Whole path prefixes (`/api/properties*`, `/api/tenants*`, `/api/dashboard*`, `/api/admin*`, ...) are protected
-  once, so new endpoints under them are protected automatically. "Is this the tenant's own issue?" is
-  checked in `MaintenanceService`.
-- **HTTP hardening**: every response has `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
-  `Content-Security-Policy: default-src 'none'`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
-  CORS is off unless `CORS_ALLOWED_ORIGIN` names exactly one origin (a `*` wildcard is refused). Request bodies
-  are limited to 64 KB (413). HTTPS and HSTS belong to the reverse proxy in front of the app.
+  - a password change (`PATCH /api/auth/password`) makes all older tokens invalid (each token carries the
+    account's token version) and returns a new token.
+- **Role checks:** 401 for a missing/invalid/expired token or disabled account, 403 for the wrong role. Whole path
+  prefixes (`/api/properties*`, `/api/tenants*`, `/api/dashboard*`, `/api/admin*`, ...) are protected once.
+- **Public registration** is controlled by `ALLOW_PUBLIC_REGISTRATION` (off: 403).
+
+### Login rate limiting
+
+- Failed logins are counted in Redis per **client IP + email**: key `auth:login:fail:<sha256(ip|email)>` (hashed,
+  so Redis holds no email addresses), `INCR` on each failure, a 15-minute window from the first failure.
+- After **5 failures** that IP + email gets **429 Too Many Requests** (with `Retry-After`) until the window ends -
+  even with the right password. The check runs before BCrypt, so blocked attempts cost nothing.
+- Successful logins are never counted, and a success clears the counter. No account is ever locked in PostgreSQL.
+- Why IP + email: by IP alone, everyone behind a shared IP (office, proxy) would be blocked together; by email
+  alone, anyone could lock a user out from anywhere. Another account from the same IP is not affected.
+- **Fail-open:** if Redis is unavailable, login works without the limit and a warning is logged.
+
+### HTTP hardening
+
+Every response has `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer` and
+`Cache-Control: no-store`. CORS is off unless `CORS_ALLOWED_ORIGIN` names exactly one origin (a `*` wildcard is
+refused at startup); other origins get a normal 403 error. Request bodies are limited to 64 KB (413). HTTPS and
+HSTS belong to the reverse proxy in front of the app.
 
 ### Examples
 
@@ -211,25 +237,19 @@ curl -X POST http://localhost:8080/api/auth/login -H "Content-Type: application/
 
 TOKEN=eyJhbGciOiJIUzI1NiJ9...
 
-# Who am I?
 curl http://localhost:8080/api/auth/me -H "Authorization: Bearer $TOKEN"
 # {"id":"...","email":"owner@example.com","role":"ADMIN","tenantId":null}
 
 # ADMIN creates a manager
-curl -X POST http://localhost:8080/api/admin/users -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8080/api/admin/users -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"name": "Meena", "email": "meena@example.com", "password": "manager-pass-1", "role": "MANAGER"}'
 # 201 {"id":"...","name":"Meena","email":"meena@example.com","role":"MANAGER","tenantId":null,"active":true}
 
-# Change your own password (any role). The answer is a new token; all older tokens stop working.
-curl -X PATCH http://localhost:8080/api/auth/password -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
+# Change your own password; the answer is a new token, all older tokens stop working
+curl -X PATCH http://localhost:8080/api/auth/password -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"currentPassword": "owner-password", "newPassword": "a-new-password"}'
 # {"token":"..."}
 ```
-
-Password change errors: 400 `Current password is incorrect`, 400 for an invalid new password (same rules as
-everywhere), 401 without a valid token. There is no "forgot password" flow (see limitations).
 
 ## API overview
 
@@ -253,25 +273,29 @@ All endpoints are under `/api` and use JSON. "Staff" means ADMIN or MANAGER.
 | | `GET /api/tenants/:tenantId/maintenance` | staff, or that tenant |
 | Dashboards | `GET /api/dashboard`, `GET /api/properties/:propertyId/dashboard` | staff |
 
-`*` = paged list (see Pagination). A tenant's own histories (`/api/tenants/:tenantId/...`) return plain arrays.
+`*` = paged list. A tenant's own histories (`/api/tenants/:tenantId/...`) return plain arrays.
+
+Status codes are used the same way everywhere: 201 create, 200 read/update/action, 204 delete, 400 invalid input
+(including malformed JSON, ids, enums and paging values), 401 authentication, 403 role/ownership, 404 unknown id,
+409 business conflict (full room, occupied bed, duplicate, invalid status move, row in use), 413 body too large,
+429 too many failed logins, 500 unexpected. Unknown JSON fields are ignored.
 
 A few rules worth knowing:
 
-- Deletes are blocked (409) when something still depends on the row: a property with rooms, a room with
-  beds, an occupied bed, a tenant with occupancy/payment/maintenance history. History is never deleted.
+- Deletes are blocked (409) when something still depends on the row: a property with rooms, a room with beds, an
+  occupied bed, a tenant with occupancy/payment/maintenance history. History is never deleted.
 - There is no delete for payments or maintenance issues; they are kept as history.
-- A tenant must be checked in to report a maintenance issue. The issue remembers the bed (and through it
-  the room and property) where it was reported, also after the tenant checks out.
-- Maintenance status moves: OPEN → IN_PROGRESS or RESOLVED, IN_PROGRESS → RESOLVED,
-  RESOLVED → CLOSED or back to OPEN (reopen). CLOSED is final.
+- A tenant must be checked in to report a maintenance issue. The issue remembers the bed (and through it the room
+  and property) where it was reported, also after the tenant checks out.
+- Maintenance status moves: OPEN → IN_PROGRESS or RESOLVED, IN_PROGRESS → RESOLVED, RESOLVED → CLOSED or back to
+  OPEN (reopen). CLOSED is final.
 
-### Request / response examples
+### Request examples
 
 ```bash
 # Create a tenant (staff)
 curl -X POST http://localhost:8080/api/tenants -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"name": "Asha", "phone": "9123400000", "joiningDate": "2026-10-01", "monthlyRent": 9000, "securityDeposit": 9000}'
-# 201 {"id":"...","name":"Asha",...,"status":"PENDING",...}
 
 # Check the tenant in to a bed
 curl -X POST http://localhost:8080/api/tenants/<tenantId>/check-in -H "Authorization: Bearer $TOKEN" \
@@ -286,7 +310,7 @@ curl -X POST http://localhost:8080/api/maintenance -H "Authorization: Bearer $TE
   -d '{"title": "Tap leaking", "description": "Bathroom tap leaking since morning", "category": "PLUMBING", "priority": "HIGH"}'
 ```
 
-### Pagination
+## Pagination
 
 `GET /api/properties`, `/api/tenants`, `/api/payments` and `/api/maintenance` return one page:
 
@@ -298,82 +322,87 @@ curl "http://localhost:8080/api/payments?status=PAID&page=1&size=20" -H "Authori
 { "items": [ ... ], "page": 1, "size": 20, "totalItems": 125, "totalPages": 7 }
 ```
 
-- `page` starts at 0 (default 0); `size` is 1 to 100 (default 20). Anything else is a 400.
+- `page` starts at 0 (default 0); `size` is 1 to 100 (default 20); anything else is a 400.
 - Filters and paging combine. A page past the end has empty `items` but still the totals.
 - Newest first, always with the row id as the last sort column, so the order (and each page) is stable.
+- `totalItems` comes from a separate `COUNT(*)`, so it can change by a row or two while rows are being added.
 
-### Dashboards
+## Transactions
 
-`GET /api/dashboard` (whole PG):
+Transactions are used only where several writes must succeed together, or where a check must still be true when
+the write happens.
 
-```json
-{
-  "properties": 3,
-  "rooms": 24,
-  "beds": { "total": 72, "available": 18, "occupied": 54 },
-  "tenants": { "pending": 4, "active": 54, "checkedOut": 21 },
-  "payments": { "paidCount": 140, "pendingCount": 18, "paidAmount": 532000.00, "pendingAmount": 72000.00 },
-  "maintenance": { "open": 7, "inProgress": 3, "resolved": 22, "closed": 9, "urgent": 2 },
-  "generatedAt": "2026-10-09T10:15:30.123456Z"
-}
-```
+- **Check-in** (one transaction): lock the tenant row (`SELECT ... FOR UPDATE`) → make sure the tenant has no open
+  stay → lock the bed row → make sure it is AVAILABLE → insert the stay → bed OCCUPIED → tenant ACTIVE. Two
+  check-ins for the same bed: the second waits for the first's lock, then sees OCCUPIED and gets 409.
+- **Check-out** (one transaction): lock tenant → find the open stay → lock bed → close the stay → bed AVAILABLE →
+  tenant CHECKED_OUT. Any failure rolls everything back.
+- **Lock order is always tenant, then bed** (manual bed status changes lock only the bed), so these transactions
+  can't deadlock each other.
+- **Adding a bed / changing a room's capacity:** the room row is locked first, then the beds are counted - so two
+  requests can't both pass the capacity check (this was a real race, fixed in Phase 9 with a regression test).
+- **Database safety nets:** partial unique indexes allow at most one open stay per bed and per tenant; foreign keys
+  block deleting rows that history still uses; CHECK constraints guard statuses, amounts and dates.
+- **Maintenance status/assignment/edit** need no transaction: a single conditional `UPDATE ... WHERE status = <the
+  status we checked>`; if another request changed it first, nothing matches and the answer is 409.
+- **Cache clearing happens after the commit**, never inside a transaction that could still roll back.
 
-`GET /api/properties/:propertyId/dashboard` (one property, 404 if it doesn't exist):
+## Redis
 
-```json
-{
-  "propertyId": "...",
-  "rooms": 8,
-  "beds": { "total": 24, "available": 6, "occupied": 18 },
-  "tenants": { "active": 18, "checkedOut": 7 },
-  "payments": { "paidCount": 40, "pendingCount": 5, "paidAmount": 150000.00, "pendingAmount": 20000.00 },
-  "maintenance": { "open": 2, "inProgress": 1, "resolved": 9, "closed": 3, "urgent": 1 },
-  "generatedAt": "2026-10-09T10:15:30.123456Z"
-}
-```
+Redis has two jobs, both optional for correctness: the **dashboard cache** and the **login rate limit**.
+PostgreSQL is the source of truth.
 
-(Example values.) Definitions:
+**Dashboard cache**
 
-- Payment amounts are totals over all recorded payments. `urgent` = URGENT issues still OPEN or IN_PROGRESS.
-- Property dashboard: `tenants.active` = checked in at this property now; `tenants.checkedOut` = stayed there
-  before and isn't living there now. Tenants who never checked in belong to no property, so they only appear
-  on the PG-wide dashboard. A payment counts for a property when the tenant was staying there during that
-  rent month.
-- `generatedAt` is when the numbers were calculated; a cached response keeps its original time.
-- Each dashboard is one SQL statement of aggregates, so its numbers are consistent with each other.
-
-## Redis caching
-
-- **What is cached:** the dashboards only, as JSON: `dashboard:summary` (whole PG) and
-  `dashboard:property:<propertyId>` (one per property).
-- **Flow:** read Redis → on a hit, return it; on a miss, run the aggregate query in PostgreSQL and store it with
-  `SET key json EX <ttl> NX`.
-- **TTL:** `DASHBOARD_CACHE_TTL_SECONDS` (default 60).
+- Keys: `dashboard:summary` (whole PG) and `dashboard:property:<propertyId>` (one per property), values are JSON.
+- Read Redis → hit: return it; miss: run the aggregate SQL and store with `SET key json EX <ttl> NX`.
+- TTL: `DASHBOARD_CACHE_TTL_SECONDS` (default 60).
 - **Clearing after writes:** after a write commits, the PG-wide key and the keys of the properties whose numbers
-  changed are set to the value `cleared` for 5 seconds (not just deleted). Other properties keep their cache.
-  - properties: create, delete
-  - rooms: create, delete
-  - beds: create, delete, status change
+  changed are set to `cleared` for 5 seconds. Other properties keep their cache.
+  - properties: create, delete · rooms: create, delete · beds: create, delete, status change
   - tenants: create, delete, check-in, check-out
-  - payments: create, update (the properties where the tenant stayed in that month, before and after the change)
-  - maintenance: create, update (the priority may change the urgent count), status change
+  - payments: create, update (the properties where the tenant stayed in that month, before and after)
+  - maintenance: create, update (priority can change the urgent count), status change
+- **Stale-cache protection:** a dashboard calculated *before* a write could otherwise be stored *after* the write
+  cleared the key. While a key says `cleared` dashboards are calculated fresh but not cached, and `NX` only stores
+  into an empty key.
+- Unreadable cached JSON is ignored and overwritten.
 
-  Reads and changes the dashboards don't count (renames, tenant details, maintenance assignment, accounts)
-  leave the cache alone. Clearing happens only after the database write succeeded, never before a transaction
-  that could still roll back.
-- **Why `cleared` and `NX`:** a dashboard request that started calculating *before* a write could otherwise
-  store its older numbers *after* the write cleared the key. While a key says `cleared`, dashboards are
-  calculated fresh but not cached, and `NX` stores a new dashboard only into an empty key.
-- **If Redis is unavailable:**
-  - a failed cache read → the dashboard is calculated from PostgreSQL (no attempt to write to Redis);
-  - a failed cache write → the calculated dashboard is still returned;
-  - a failed clear → the write still succeeds; the key is remembered and cleared again before the cache is
-    used next time, and until that works the cache is skipped.
+**When Redis is unavailable**
 
-  Requests never fail because of Redis; problems are logged as warnings. The connect timeout is 1 second, so
-  while Redis is unreachable a dashboard request can take about a second longer.
-- **Cached JSON that can't be read** (corrupt or from an older version) is ignored and overwritten.
-- The Compose Redis keeps nothing on disk: after a restart it starts empty instead of loading old dashboards.
+- Dashboards are calculated from PostgreSQL; writes still succeed; logins work without rate limiting. Problems are
+  logged as warnings, never returned as errors.
+- A clear that failed is remembered and repeated before the cache is used again; until then the cache is skipped.
+- After a Redis failure, Redis is skipped for 5 seconds (`RedisBackoff`), so requests don't each wait for the
+  1-second connect timeout during an outage.
+- Measured in Docker with Redis stopped: dashboard p50 22 ms (only the first requests wait for the timeout),
+  login unchanged (~0.5 s, which is BCrypt).
+
+## Observability
+
+- Every response carries `X-Request-Id` (the caller's value if it is short and plain, otherwise a new UUID).
+- One log line per request, written when it finishes:
+
+  ```text
+  2026-10-09T09:58:12.415Z [vert.x-eventloop-thread-0] INFO RequestLogHandler - request id=final-check-1 method=GET path=/api/properties status=200 durationMs=8 user=ddafa372-...
+  ```
+
+  Only method, path, status, duration and the user id - never the query string, headers, JWT, body or passwords.
+  `GET /api/health` (called by the Docker health check) is logged at DEBUG.
+- Levels: INFO for startup/shutdown and requests, WARN for recoverable infrastructure problems (Redis down),
+  ERROR for unexpected failures (with the request id and stack trace, server-side only).
+- **Database pool:** at most 10 connections, at most 100 requests waiting for one, 5 s to get a connection or open a
+  new one, idle connections closed after 5 minutes, every connection replaced after 30 minutes.
+
+## Performance
+
+A light smoke test (curl, 20 parallel requests) against the Docker stack with seeded data (20 properties,
+2,000 beds, 2,500 tenants, 24,000 payments, 5,000 issues): health, cached dashboards and paged lists answer in about
+10 ms (p50), first dashboard calculation 40-55 ms, login about 0.5 s (BCrypt cost 12, on worker threads - never
+the event loop). No blocked-thread warnings. `EXPLAIN ANALYZE`: PG-wide dashboard ~14 ms, property dashboard
+~11 ms, payment-to-property lookup < 1 ms. At this size PostgreSQL correctly prefers sequential scans (even V7's index is not used yet - it pays
+off as `maintenance_issues` grows); a query rewrite driven by the property's tenants was tried and gave no gain,
+so no change and no new index were made.
 
 ## Running tests
 
@@ -381,15 +410,15 @@ curl "http://localhost:8080/api/payments?status=PAID&page=1&size=20" -H "Authori
 ./gradlew clean test
 ```
 
-Docker must be running: the integration tests start throwaway PostgreSQL and Redis containers with
-Testcontainers (they don't use the Compose containers) and call the real HTTP API. Some tests start extra
-copies of the application, e.g. on a brand-new empty database to check that all migrations run from scratch.
-The unit tests mock the repositories and the Redis client. There were 452 tests when this README was written;
-all of them pass.
+Docker must be running: integration tests start throwaway PostgreSQL and Redis containers with Testcontainers
+(they don't use the Compose containers). Some start extra copies of the application - on a brand-new empty
+database, with Redis unreachable, or to test shutdown. There are concurrency tests that send many requests at the
+same moment. **487 tests, all passing** at the end of Phase 9.
 
 ## Database migrations
 
-Flyway migrations live in `src/main/resources/db/migration` and run automatically at startup:
+Flyway migrations in `src/main/resources/db/migration` run automatically at startup, on an empty database as well
+as on an existing one:
 
 | Version | What it does |
 |---|---|
@@ -401,26 +430,28 @@ Flyway migrations live in `src/main/resources/db/migration` and run automaticall
 | V6 | account status (`active`) and token version |
 | V7 | index for the property dashboard (maintenance issues by bed) |
 
-They run on an empty database as well as on an existing one. Never edit a migration that has already run;
-add a new version instead.
+Never edit a migration that has already run; add a new version instead.
 
 ## Known limitations
 
-- **No "forgot password" / password reset.** There is no email infrastructure; a user who forgot their password
-  needs an ADMIN (for staff) or the database. Users can change their own password while logged in.
-- **No logout endpoint.** A token stays valid until it expires unless the password is changed or the account is
-  switched off. Each authenticated request costs one small primary-key query for the account check.
-- **No rate limiting** on login or password change; put it in the reverse proxy if the API is public.
-- **Breaking change in Phase 8:** the four paged list endpoints now return `{items, page, ...}` instead of an
-  array, and properties and tenants are listed newest first.
-- **Maintenance issues need a checked-in tenant.** There are no property-wide issues (for example a broken lift).
-- **Payments are matched to properties by date.** A tenant who moved between two properties during a month
-  counts on both property dashboards for that month's payments.
-- **Dashboard cache (single application instance assumed):** clears that failed while Redis was down are
-  remembered in that instance's memory. With several app instances, or if the app restarts before Redis comes
-  back, a dashboard can be out of date for up to the TTL. A dashboard calculation slower than 5 seconds could
-  also still cache older numbers.
-- **Paged lists count and fetch in two queries**, so `totalItems` can be off by one while rows are being added.
-- **Route order matters for one route:** `GET /api/tenants/:tenantId/maintenance` (open to tenants) is
-  registered in `MainVerticle` before the staff-only `/api/tenants*` guard. Keep that order when adding routes.
-- **HTTPS is not handled by the app**; run it behind a reverse proxy / load balancer that terminates TLS.
+- **No "forgot password" / email recovery.** Users change their password while logged in; a forgotten staff
+  password needs an ADMIN or the database.
+- **No logout endpoint or token blacklist.** A token stays valid until it expires unless the password changes or
+  the account is switched off. Each authenticated request costs one small primary-key query.
+- **No HTTPS inside the app**; run it behind a reverse proxy / load balancer that terminates TLS.
+- **Rate limiting uses the TCP peer address.** Behind a reverse proxy every client has the proxy's address, so the
+  limit becomes effectively per email; one IP trying many different emails is not limited (add a per-IP limit at
+  the proxy for that).
+- **Maintenance issues need a checked-in tenant**; there are no property-wide issues.
+- **Payments are matched to properties by date**: a tenant who moved during a month counts on both property
+  dashboards for that month.
+- **Cache retry state is in memory and assumes one application instance.** With several instances (or a restart
+  while Redis is down) a dashboard can be out of date for up to the TTL; a dashboard calculation slower than 5
+  seconds could still cache older numbers.
+- **Pagination totals can shift** under concurrent writes (count and page are two queries).
+- **Redis commands have a connect timeout but no per-command timeout**: a Redis that accepts connections but never
+  answers would slow requests down.
+- **Route order matters for one route:** `GET /api/tenants/:tenantId/maintenance` (open to tenants) is registered
+  before the staff-only `/api/tenants*` guard in `MainVerticle`.
+
+This is a well-tested portfolio project, not a hardened enterprise product.
