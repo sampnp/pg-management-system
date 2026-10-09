@@ -6,6 +6,7 @@ import com.pgmanager.model.Room;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
+import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.Tuple;
 
 import java.util.List;
@@ -43,9 +44,19 @@ public class RoomRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(RoomRepository::toRoom));
     }
 
-    /** Returns the updated room, or empty if no room has this id. */
-    public Future<Optional<Room>> update(UUID id, String roomNumber, int capacity) {
-        return pool.preparedQuery("UPDATE rooms SET room_number = $2, capacity = $3 WHERE id = $1 RETURNING " + COLUMNS)
+    /**
+     * Same as findById, but locks the room row until the transaction ends (FOR UPDATE). Adding a bed and
+     * changing the capacity both lock the room first, so they can't both pass the capacity check at once.
+     */
+    public Future<Optional<Room>> findByIdForUpdate(SqlClient client, UUID id) {
+        return client.preparedQuery("SELECT " + COLUMNS + " FROM rooms WHERE id = $1 FOR UPDATE")
+                .execute(Tuple.of(id))
+                .map(rows -> DbUtils.firstRow(rows).map(RoomRepository::toRoom));
+    }
+
+    /** Returns the updated room, or empty if no room has this id. Runs in the caller's transaction. */
+    public Future<Optional<Room>> update(SqlClient client, UUID id, String roomNumber, int capacity) {
+        return client.preparedQuery("UPDATE rooms SET room_number = $2, capacity = $3 WHERE id = $1 RETURNING " + COLUMNS)
                 .execute(Tuple.of(id, roomNumber, capacity))
                 .map(rows -> DbUtils.firstRow(rows).map(RoomRepository::toRoom))
                 .recover(err -> Future.failedFuture(translateWriteError(err)));

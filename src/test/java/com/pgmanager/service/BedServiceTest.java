@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.InOrder;
 
 import java.time.Instant;
 import java.util.List;
@@ -35,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -70,14 +72,19 @@ class BedServiceTest {
     @Test
     void createBedInRoomWithFreeCapacity() throws Exception {
         roomExists(true);
-        when(bedRepository.countByRoomId(room.id())).thenReturn(Future.succeededFuture(1));
+        when(bedRepository.countByRoomId(tx, room.id())).thenReturn(Future.succeededFuture(1));
         Bed saved = new Bed(UUID.randomUUID(), room.id(), "B", BedStatus.AVAILABLE);
-        when(bedRepository.create(room.id(), "B")).thenReturn(Future.succeededFuture(saved));
+        when(bedRepository.create(tx, room.id(), "B")).thenReturn(Future.succeededFuture(saved));
 
         Bed result = await(bedService.create(room.id(), new BedRequest(" B ")));
 
         assertEquals(BedStatus.AVAILABLE, result.status());
-        verify(bedRepository).create(room.id(), "B");
+        // The room is locked first, then counted and the bed added - all in the same transaction
+        InOrder order = inOrder(roomRepository, bedRepository);
+        order.verify(roomRepository).findByIdForUpdate(tx, room.id());
+        order.verify(bedRepository).countByRoomId(tx, room.id());
+        order.verify(bedRepository).create(tx, room.id(), "B");
+        verify(dashboardCache).invalidate(Set.of(room.propertyId()));
     }
 
     @Test
@@ -88,19 +95,20 @@ class BedServiceTest {
 
         assertInstanceOf(NotFoundException.class, error);
         assertEquals("Room not found", error.getMessage());
-        verify(bedRepository, never()).create(any(), anyString());
+        verify(bedRepository, never()).create(any(), any(), anyString());
     }
 
     @Test
     void createBedInFullRoomFailsWith409() throws Exception {
         roomExists(true);
-        when(bedRepository.countByRoomId(room.id())).thenReturn(Future.succeededFuture(2));
+        when(bedRepository.countByRoomId(tx, room.id())).thenReturn(Future.succeededFuture(2));
 
         Throwable error = awaitFailure(bedService.create(room.id(), new BedRequest("C")));
 
         assertInstanceOf(ConflictException.class, error);
         assertEquals("Room is full: it already has 2 of 2 beds", error.getMessage());
-        verify(bedRepository, never()).create(any(), anyString());
+        verify(bedRepository, never()).create(any(), any(), anyString());
+        verify(dashboardCache, never()).invalidate(any());
     }
 
     @Test
@@ -235,6 +243,8 @@ class BedServiceTest {
     }
 
     private void roomExists(boolean exists) {
-        when(roomRepository.findById(room.id())).thenReturn(Future.succeededFuture(exists ? Optional.of(room) : Optional.empty()));
+        Optional<Room> found = exists ? Optional.of(room) : Optional.empty();
+        when(roomRepository.findById(room.id())).thenReturn(Future.succeededFuture(found));
+        when(roomRepository.findByIdForUpdate(tx, room.id())).thenReturn(Future.succeededFuture(found));
     }
 }

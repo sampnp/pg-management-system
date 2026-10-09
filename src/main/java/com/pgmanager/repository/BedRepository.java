@@ -26,8 +26,9 @@ public class BedRepository {
     }
 
     /** New beds get the column default status, AVAILABLE. */
-    public Future<Bed> create(UUID roomId, String bedNumber) {
-        return pool.preparedQuery("INSERT INTO beds (room_id, bed_number) VALUES ($1, $2) RETURNING " + COLUMNS)
+    /** Runs in the caller's transaction (after the room is locked, see BedService.create). */
+    public Future<Bed> create(SqlClient client, UUID roomId, String bedNumber) {
+        return client.preparedQuery("INSERT INTO beds (room_id, bed_number) VALUES ($1, $2) RETURNING " + COLUMNS)
                 .execute(Tuple.of(roomId, bedNumber))
                 .map(rows -> toBed(rows.iterator().next()))
                 .recover(err -> Future.failedFuture(translateWriteError(err)));
@@ -45,8 +46,8 @@ public class BedRepository {
                 .map(rows -> DbUtils.firstRow(rows).map(BedRepository::toBed));
     }
 
-    public Future<Integer> countByRoomId(UUID roomId) {
-        return pool.preparedQuery("SELECT COUNT(*) AS bed_count FROM beds WHERE room_id = $1")
+    public Future<Integer> countByRoomId(SqlClient client, UUID roomId) {
+        return client.preparedQuery("SELECT COUNT(*) AS bed_count FROM beds WHERE room_id = $1")
                 .execute(Tuple.of(roomId))
                 .map(rows -> rows.iterator().next().getInteger("bed_count"));
     }

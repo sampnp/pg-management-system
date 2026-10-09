@@ -40,20 +40,29 @@ public class BedService {
         this.dashboardCache = dashboardCache;
     }
 
+    /**
+     * Adds a bed if the room has space. Count and insert run in one transaction with the room row locked, so
+     * two requests at the same moment can't both see "1 of 2" and both add a bed (the second one waits for
+     * the lock and then sees "2 of 2").
+     */
     public Future<Bed> create(UUID roomId, BedRequest request) {
         return Future.succeededFuture(request)
                 .map(BedService::validate)
-                .compose(valid -> requireRoom(roomId)
-                        .compose(room -> bedRepository.countByRoomId(roomId)
+                .compose(valid -> pool.withTransaction(tx -> roomRepository.findByIdForUpdate(tx, roomId)
+                        .map(room -> room.orElseThrow(() -> new NotFoundException(RoomService.ROOM_NOT_FOUND)))
+                        .compose(room -> bedRepository.countByRoomId(tx, roomId)
                                 .compose(bedCount -> {
                                     // A room's capacity is the maximum number of beds it can hold
                                     if (bedCount >= room.capacity()) {
                                         return Future.failedFuture(new ConflictException(
                                                 "Room is full: it already has " + bedCount + " of " + room.capacity() + " beds"));
                                     }
-                                    return bedRepository.create(roomId, valid.bedNumber())
-                                            .compose(saved -> dashboardCache.invalidate(Set.of(room.propertyId())).map(saved));
-                                })));
+                                    return bedRepository.create(tx, roomId, valid.bedNumber());
+                                }))))
+                // After the commit
+                .compose(saved -> propertyOf(saved)
+                        .compose(propertyIds -> dashboardCache.invalidate(propertyIds))
+                        .map(saved));
     }
 
     public Future<List<Bed>> listByRoom(UUID roomId) {

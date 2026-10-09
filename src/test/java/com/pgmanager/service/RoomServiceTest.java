@@ -1,5 +1,6 @@
 package com.pgmanager.service;
 
+import com.pgmanager.MockTransactions;
 import com.pgmanager.dto.RoomRequest;
 import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
@@ -11,8 +12,11 @@ import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
 import io.vertx.core.Future;
+import io.vertx.sqlclient.Pool;
+import io.vertx.sqlclient.SqlConnection;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -32,6 +36,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -47,6 +52,7 @@ class RoomServiceTest {
     private RoomService roomService;
 
     private DashboardCache dashboardCache;
+    private final SqlConnection tx = mock(SqlConnection.class);
 
     @BeforeEach
     void setUp() {
@@ -55,7 +61,9 @@ class RoomServiceTest {
         bedRepository = mock(BedRepository.class);
         dashboardCache = mock(DashboardCache.class);
         when(dashboardCache.invalidate(any())).thenReturn(Future.succeededFuture());
-        roomService = new RoomService(propertyRepository, roomRepository, bedRepository, dashboardCache);
+        Pool pool = mock(Pool.class);
+        MockTransactions.runInline(pool, tx);
+        roomService = new RoomService(pool, propertyRepository, roomRepository, bedRepository, dashboardCache);
     }
 
     @Test
@@ -121,29 +129,34 @@ class RoomServiceTest {
     void updateRoom() throws Exception {
         Room room = new Room(UUID.randomUUID(), propertyId, "101", 2);
         Room updated = new Room(room.id(), propertyId, "102", 4);
-        when(roomRepository.findById(room.id())).thenReturn(Future.succeededFuture(Optional.of(room)));
-        when(bedRepository.countByRoomId(room.id())).thenReturn(Future.succeededFuture(1));
-        when(roomRepository.update(room.id(), "102", 4)).thenReturn(Future.succeededFuture(Optional.of(updated)));
+        when(roomRepository.findByIdForUpdate(tx, room.id())).thenReturn(Future.succeededFuture(Optional.of(room)));
+        when(bedRepository.countByRoomId(tx, room.id())).thenReturn(Future.succeededFuture(1));
+        when(roomRepository.update(tx, room.id(), "102", 4)).thenReturn(Future.succeededFuture(Optional.of(updated)));
 
         assertEquals(updated, await(roomService.update(room.id(), new RoomRequest("102", 4))));
+        // The room is locked before the beds are counted
+        InOrder order = inOrder(roomRepository, bedRepository);
+        order.verify(roomRepository).findByIdForUpdate(tx, room.id());
+        order.verify(bedRepository).countByRoomId(tx, room.id());
+        order.verify(roomRepository).update(tx, room.id(), "102", 4);
     }
 
     @Test
     void updateCapacityBelowExistingBedCountFailsWith409() throws Exception {
         Room room = new Room(UUID.randomUUID(), propertyId, "101", 3);
-        when(roomRepository.findById(room.id())).thenReturn(Future.succeededFuture(Optional.of(room)));
-        when(bedRepository.countByRoomId(room.id())).thenReturn(Future.succeededFuture(3));
+        when(roomRepository.findByIdForUpdate(tx, room.id())).thenReturn(Future.succeededFuture(Optional.of(room)));
+        when(bedRepository.countByRoomId(tx, room.id())).thenReturn(Future.succeededFuture(3));
 
         Throwable error = awaitFailure(roomService.update(room.id(), new RoomRequest("101", 2)));
 
         assertInstanceOf(ConflictException.class, error);
-        verify(roomRepository, never()).update(any(), anyString(), anyInt());
+        verify(roomRepository, never()).update(any(), any(), anyString(), anyInt());
     }
 
     @Test
     void updateMissingRoomFailsWith404() throws Exception {
         UUID id = UUID.randomUUID();
-        when(roomRepository.findById(id)).thenReturn(Future.succeededFuture(Optional.empty()));
+        when(roomRepository.findByIdForUpdate(tx, id)).thenReturn(Future.succeededFuture(Optional.empty()));
 
         assertInstanceOf(NotFoundException.class, awaitFailure(roomService.update(id, new RoomRequest("101", 2))));
     }

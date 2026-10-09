@@ -11,6 +11,7 @@ import com.pgmanager.repository.DashboardCache;
 import com.pgmanager.repository.PropertyRepository;
 import com.pgmanager.repository.RoomRepository;
 import io.vertx.core.Future;
+import io.vertx.sqlclient.Pool;
 
 import java.util.List;
 import java.util.Set;
@@ -26,9 +27,11 @@ public class RoomService {
     private final RoomRepository roomRepository;
     private final BedRepository bedRepository;
     private final DashboardCache dashboardCache;
+    private final Pool pool;
 
-    public RoomService(PropertyRepository propertyRepository, RoomRepository roomRepository, BedRepository bedRepository,
-                       DashboardCache dashboardCache) {
+    public RoomService(Pool pool, PropertyRepository propertyRepository, RoomRepository roomRepository,
+                       BedRepository bedRepository, DashboardCache dashboardCache) {
+        this.pool = pool;
         this.propertyRepository = propertyRepository;
         this.roomRepository = roomRepository;
         this.bedRepository = bedRepository;
@@ -54,18 +57,23 @@ public class RoomService {
                 .map(room -> room.orElseThrow(() -> new NotFoundException(ROOM_NOT_FOUND)));
     }
 
+    /**
+     * Count and update run in one transaction with the room row locked (like BedService.create), so a bed
+     * added at the same moment can't end up in a room whose capacity was just lowered below the bed count.
+     */
     public Future<Room> update(UUID id, RoomRequest request) {
         return Future.succeededFuture(request)
                 .map(RoomService::validate)
-                .compose(valid -> findById(id)
-                        .compose(room -> bedRepository.countByRoomId(id))
+                .compose(valid -> pool.withTransaction(tx -> roomRepository.findByIdForUpdate(tx, id)
+                        .map(room -> room.orElseThrow(() -> new NotFoundException(ROOM_NOT_FOUND)))
+                        .compose(room -> bedRepository.countByRoomId(tx, id))
                         .compose(bedCount -> {
                             if (valid.capacity() < bedCount) {
                                 return Future.failedFuture(new ConflictException(
                                         "Capacity cannot be less than the number of beds in the room (" + bedCount + ")"));
                             }
-                            return roomRepository.update(id, valid.roomNumber(), valid.capacity());
-                        }))
+                            return roomRepository.update(tx, id, valid.roomNumber(), valid.capacity());
+                        })))
                 .map(updated -> updated.orElseThrow(() -> new NotFoundException(ROOM_NOT_FOUND)));
     }
 
