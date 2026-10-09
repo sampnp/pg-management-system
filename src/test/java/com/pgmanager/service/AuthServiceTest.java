@@ -10,6 +10,7 @@ import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.ForbiddenException;
 import com.pgmanager.exception.NotFoundException;
+import com.pgmanager.exception.TooManyRequestsException;
 import com.pgmanager.exception.UnauthorizedException;
 import com.pgmanager.model.Role;
 import com.pgmanager.model.Tenant;
@@ -19,6 +20,7 @@ import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.AuthUser;
 import com.pgmanager.security.JwtService;
+import com.pgmanager.security.LoginRateLimiter;
 import com.pgmanager.security.PasswordHasher;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -36,6 +38,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -58,6 +61,8 @@ import static org.mockito.Mockito.when;
 /** AuthService with a mocked repository: tests business rules without a database. */
 class AuthServiceTest {
 
+    private static final String IP = "203.0.113.7";
+
     private static Vertx vertx;
 
     // Low BCrypt cost keeps the tests fast
@@ -65,6 +70,7 @@ class AuthServiceTest {
     private UserRepository userRepository;
     private TenantRepository tenantRepository;
     private JwtService jwtService;
+    private LoginRateLimiter loginRateLimiter;
     private AuthService authService;
 
     @BeforeAll
@@ -82,7 +88,11 @@ class AuthServiceTest {
         userRepository = mock(UserRepository.class);
         tenantRepository = mock(TenantRepository.class);
         jwtService = new JwtService(vertx, new JwtConfig("unit-test-secret-that-is-at-least-32-chars", 3600));
-        authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService, true);
+        loginRateLimiter = mock(LoginRateLimiter.class);
+        when(loginRateLimiter.blockedFor(anyString(), anyString())).thenReturn(Future.succeededFuture(OptionalLong.empty()));
+        when(loginRateLimiter.recordFailure(anyString(), anyString())).thenReturn(Future.succeededFuture());
+        when(loginRateLimiter.reset(anyString(), anyString())).thenReturn(Future.succeededFuture());
+        authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService, true, loginRateLimiter);
     }
 
     // ---------- registration ----------
@@ -121,7 +131,7 @@ class AuthServiceTest {
         User admin = new User(UUID.randomUUID(), "Admin", "admin@example.com", passwordHasher.hash("password123"), Role.ADMIN, Instant.now());
         when(userRepository.findByEmail("admin@example.com")).thenReturn(Future.succeededFuture(Optional.of(admin)));
 
-        String token = await(authService.login(new LoginRequest("admin@example.com", "password123")));
+        String token = await(authService.login(new LoginRequest("admin@example.com", "password123"), IP));
 
         assertEquals(Role.ADMIN, await(jwtService.verify(token)).role());
     }
@@ -160,7 +170,7 @@ class AuthServiceTest {
 
     @Test
     void registrationIsRefusedWhenPublicRegistrationIsOff() throws Exception {
-        AuthService closed = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService, false);
+        AuthService closed = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService, false, loginRateLimiter);
 
         Throwable error = awaitFailure(closed.register(new RegisterRequest("Sambit", "sambit@example.com", "password123")));
 
@@ -374,7 +384,7 @@ class AuthServiceTest {
         User stored = storedUser("password123");
         when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(stored)));
 
-        String token = await(authService.login(new LoginRequest("Sambit@example.com", "password123")));
+        String token = await(authService.login(new LoginRequest("Sambit@example.com", "password123"), IP));
 
         AuthUser authUser = await(jwtService.verify(token));
         assertEquals(stored.id(), authUser.id());
@@ -388,12 +398,12 @@ class AuthServiceTest {
                 stored.createdAt(), null, false, 0);
         when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(switchedOff)));
 
-        Throwable error = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "password123")));
+        Throwable error = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "password123"), IP));
         assertInstanceOf(UnauthorizedException.class, error);
         assertEquals("Account is disabled", error.getMessage());
 
         // With a wrong password it gives nothing away: same answer as for any wrong password
-        Throwable wrongPassword = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "wrong-password")));
+        Throwable wrongPassword = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "wrong-password"), IP));
         assertEquals("Invalid email or password", wrongPassword.getMessage());
     }
 
@@ -401,7 +411,7 @@ class AuthServiceTest {
     void loginWithWrongPasswordFailsWithUnauthorized() throws Exception {
         when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(storedUser("password123"))));
 
-        Throwable error = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "wrong-password")));
+        Throwable error = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "wrong-password"), IP));
 
         assertInstanceOf(UnauthorizedException.class, error);
         assertEquals("Invalid email or password", error.getMessage());
@@ -411,15 +421,65 @@ class AuthServiceTest {
     void loginWithUnknownEmailGivesTheSameErrorAsWrongPassword() throws Exception {
         when(userRepository.findByEmail("nobody@example.com")).thenReturn(Future.succeededFuture(Optional.empty()));
 
-        Throwable error = awaitFailure(authService.login(new LoginRequest("nobody@example.com", "password123")));
+        Throwable error = awaitFailure(authService.login(new LoginRequest("nobody@example.com", "password123"), IP));
 
         assertInstanceOf(UnauthorizedException.class, error);
         assertEquals("Invalid email or password", error.getMessage());
     }
 
+    // ---------- login rate limiting ----------
+
+    @Test
+    void blockedLoginIs429BeforeAnyPasswordCheck() throws Exception {
+        when(loginRateLimiter.blockedFor(IP, "sambit@example.com")).thenReturn(Future.succeededFuture(OptionalLong.of(600)));
+
+        Throwable error = awaitFailure(authService.login(new LoginRequest(" Sambit@Example.com ", "password123"), IP));
+
+        assertInstanceOf(TooManyRequestsException.class, error);
+        assertEquals("Too many failed login attempts. Try again later", error.getMessage());
+        assertEquals(600, ((TooManyRequestsException) error).retryAfterSeconds());
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    void wrongPasswordIsCountedForThatIpAndEmail() throws Exception {
+        when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(storedUser("password123"))));
+
+        awaitFailure(authService.login(new LoginRequest("Sambit@example.com", "wrong-password"), IP));
+
+        verify(loginRateLimiter).recordFailure(IP, "sambit@example.com");
+        verify(loginRateLimiter, never()).reset(any(), any());
+    }
+
+    @Test
+    void unknownEmailIsCountedToo() throws Exception {
+        when(userRepository.findByEmail("nobody@example.com")).thenReturn(Future.succeededFuture(Optional.empty()));
+
+        awaitFailure(authService.login(new LoginRequest("nobody@example.com", "password123"), IP));
+
+        verify(loginRateLimiter).recordFailure(IP, "nobody@example.com");
+    }
+
+    @Test
+    void successfulLoginClearsTheFailuresAndIsNeverCounted() throws Exception {
+        when(userRepository.findByEmail("sambit@example.com")).thenReturn(Future.succeededFuture(Optional.of(storedUser("password123"))));
+
+        await(authService.login(new LoginRequest("sambit@example.com", "password123"), IP));
+
+        verify(loginRateLimiter).reset(IP, "sambit@example.com");
+        verify(loginRateLimiter, never()).recordFailure(any(), any());
+    }
+
+    @Test
+    void invalidLoginRequestDoesNotTouchTheRateLimiter() throws Exception {
+        awaitFailure(authService.login(new LoginRequest("sambit@example.com", " "), IP));
+
+        verifyNoInteractions(loginRateLimiter);
+    }
+
     @Test
     void loginWithMissingFieldsFailsWithBadRequest() throws Exception {
-        Throwable error = awaitFailure(authService.login(new LoginRequest("sambit@example.com", "")));
+        Throwable error = awaitFailure(authService.login(new LoginRequest("sambit@example.com", ""), IP));
 
         assertInstanceOf(BadRequestException.class, error);
         verifyNoInteractions(userRepository);

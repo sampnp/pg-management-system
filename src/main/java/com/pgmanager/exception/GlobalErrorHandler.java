@@ -23,6 +23,10 @@ public class GlobalErrorHandler implements Handler<RoutingContext> {
         }
 
         ApiError error = switch (ctx.failure()) {
+            case TooManyRequestsException e -> {
+                ctx.response().putHeader("Retry-After", String.valueOf(e.retryAfterSeconds()));
+                yield ApiError.of(e.statusCode(), e.getMessage());
+            }
             case ApiException e -> ApiError.of(e.statusCode(), e.getMessage());
             case DecodeException e -> ApiError.of(400, "Malformed JSON request body");
             // Vert.x itself failed the request with a status code (404 no route, 405, 413 body too large...)

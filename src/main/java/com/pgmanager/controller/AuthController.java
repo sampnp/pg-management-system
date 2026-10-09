@@ -9,6 +9,7 @@ import com.pgmanager.dto.TenantAccountRequest;
 import com.pgmanager.dto.UserResponse;
 import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.service.AuthService;
+import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.web.RoutingContext;
 
 /**
@@ -38,7 +39,9 @@ public class AuthController {
     /** POST /api/auth/login */
     public void login(RoutingContext ctx) {
         LoginRequest request = ctx.body().asPojo(LoginRequest.class);
-        authService.login(request)
+        // The TCP peer address. Behind a reverse proxy this is the proxy (see README: rate limiting)
+        SocketAddress remote = ctx.request().remoteAddress();
+        authService.login(request, remote == null ? "unknown" : remote.hostAddress())
                 .onSuccess(token -> ctx.json(new LoginResponse(token)))
                 .onFailure(ctx::fail);
     }

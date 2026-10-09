@@ -9,6 +9,7 @@ import com.pgmanager.exception.BadRequestException;
 import com.pgmanager.exception.ConflictException;
 import com.pgmanager.exception.ForbiddenException;
 import com.pgmanager.exception.NotFoundException;
+import com.pgmanager.exception.TooManyRequestsException;
 import com.pgmanager.exception.UnauthorizedException;
 import com.pgmanager.model.Role;
 import com.pgmanager.model.User;
@@ -16,6 +17,7 @@ import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.AuthUser;
 import com.pgmanager.security.JwtService;
+import com.pgmanager.security.LoginRateLimiter;
 import com.pgmanager.security.PasswordHasher;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -43,17 +45,20 @@ public class AuthService {
     private final PasswordHasher passwordHasher;
     private final JwtService jwtService;
     private final boolean allowPublicRegistration;
+    private final LoginRateLimiter loginRateLimiter;
     /** Checked when the email is unknown, so "unknown email" and "wrong password" take the same time. */
     private final String dummyHash;
 
     public AuthService(Vertx vertx, UserRepository userRepository, TenantRepository tenantRepository,
-                       PasswordHasher passwordHasher, JwtService jwtService, boolean allowPublicRegistration) {
+                       PasswordHasher passwordHasher, JwtService jwtService, boolean allowPublicRegistration,
+                       LoginRateLimiter loginRateLimiter) {
         this.vertx = vertx;
         this.userRepository = userRepository;
         this.tenantRepository = tenantRepository;
         this.passwordHasher = passwordHasher;
         this.jwtService = jwtService;
         this.allowPublicRegistration = allowPublicRegistration;
+        this.loginRateLimiter = loginRateLimiter;
         this.dummyHash = passwordHasher.hash(UUID.randomUUID().toString());
     }
 
@@ -157,24 +162,37 @@ public class AuthService {
                 });
     }
 
-    /** Returns a signed JWT if the credentials are valid. */
-    public Future<String> login(LoginRequest request) {
+    /**
+     * Returns a signed JWT if the credentials are valid. After too many failures from the same IP for the same
+     * email the answer is 429 (see LoginRateLimiter) - checked before BCrypt, so blocked attempts cost nothing.
+     */
+    public Future<String> login(LoginRequest request, String clientIp) {
         if (request == null || isBlank(request.email()) || isBlank(request.password())) {
             return Future.failedFuture(new BadRequestException("email and password are required"));
         }
 
-        return userRepository.findByEmail(normalizeEmail(request.email()))
-                .compose(user -> vertx.executeBlocking(() -> checkPassword(user, request.password()), false))
-                .compose(user -> {
-                    if (user.isEmpty()) {
-                        // Same message for unknown email and wrong password, so attackers can't discover accounts
-                        return Future.failedFuture(new UnauthorizedException(INVALID_CREDENTIALS));
+        String email = normalizeEmail(request.email());
+        return loginRateLimiter.blockedFor(clientIp, email)
+                .compose(blockedFor -> {
+                    if (blockedFor.isPresent()) {
+                        return Future.failedFuture(new TooManyRequestsException(
+                                "Too many failed login attempts. Try again later", blockedFor.getAsLong()));
                     }
-                    if (!user.get().active()) {
-                        // Only said after a correct password, so it doesn't reveal anything to a guesser
-                        return Future.failedFuture(new UnauthorizedException("Account is disabled"));
-                    }
-                    return Future.succeededFuture(jwtService.generateToken(user.get()));
+                    return userRepository.findByEmail(email)
+                            .compose(user -> vertx.executeBlocking(() -> checkPassword(user, request.password()), false))
+                            .compose(user -> {
+                                if (user.isEmpty()) {
+                                    // Same message for unknown email and wrong password, so attackers can't discover accounts
+                                    return loginRateLimiter.recordFailure(clientIp, email)
+                                            .compose(v -> Future.failedFuture(new UnauthorizedException(INVALID_CREDENTIALS)));
+                                }
+                                if (!user.get().active()) {
+                                    // Only said after a correct password, so it doesn't reveal anything to a guesser
+                                    return Future.failedFuture(new UnauthorizedException("Account is disabled"));
+                                }
+                                return loginRateLimiter.reset(clientIp, email)
+                                        .map(v -> jwtService.generateToken(user.get()));
+                            });
                 });
     }
 

@@ -30,6 +30,7 @@ import com.pgmanager.repository.TenantRepository;
 import com.pgmanager.repository.UserRepository;
 import com.pgmanager.security.JwtAuthHandler;
 import com.pgmanager.security.JwtService;
+import com.pgmanager.security.LoginRateLimiter;
 import com.pgmanager.security.PasswordHasher;
 import com.pgmanager.security.RoleHandler;
 import com.pgmanager.security.SecurityHeadersHandler;
@@ -116,7 +117,7 @@ public class MainVerticle extends VerticleBase {
         PasswordHasher passwordHasher = new PasswordHasher(PasswordHasher.DEFAULT_COST);
         JwtService jwtService = new JwtService(vertx, config.jwt());
         authService = new AuthService(vertx, userRepository, tenantRepository, passwordHasher, jwtService,
-                config.security().allowPublicRegistration());
+                config.security().allowPublicRegistration(), new LoginRateLimiter(RedisAPI.api(redis)));
         UserService userService = new UserService(userRepository);
 
         // Cleared by every service whose writes change a number on the dashboard
